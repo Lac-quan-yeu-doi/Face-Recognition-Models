@@ -24,24 +24,34 @@ from utils.schedulers import get_scheduler
 
 load_dotenv()
 
-def save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name):
+def save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint):
     """Save checkpoint and keep only the 3 latest checkpoints."""
-    checkpoint_path = f'{model_checkpoints_path}/{model_name}_checkpoint_epoch_{epoch}.pth'
-    torch.save({
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'scaler_state_dict': scaler.state_dict(),
-    }, checkpoint_path)
-    
-    # Keep only the 3 latest checkpoints
-    checkpoints = sorted(
-        [f for f in os.listdir(model_checkpoints_path) if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
-        key=lambda x: int(x.split('_epoch_')[-1].split('.pth')[0])
-    )
-    while len(checkpoints) > 3:
-        os.remove(os.path.join(model_checkpoints_path, checkpoints.pop(0)))
+    if isCheckpoint:
+        checkpoint_path = f'{model_checkpoints_path}/{model_name}_checkpoint_epoch_{epoch}.pth'
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'scaler_state_dict': scaler.state_dict(),
+        }, checkpoint_path)
+        
+        # Keep only the 3 latest checkpoints
+        checkpoints = sorted(
+            [f for f in os.listdir(model_checkpoints_path) if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
+            key=lambda x: int(x.split('_epoch_')[-1].split('.pth')[0])
+        )
+        while len(checkpoints) > 3:
+            os.remove(os.path.join(model_checkpoints_path, checkpoints.pop(0)))
+    else:
+        checkpoint_path = f'{model_checkpoints_path}/{model_name}_min_loss.pth'
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'scaler_state_dict': scaler.state_dict(),
+        }, checkpoint_path)
 
 def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device):
     """Load the latest checkpoint if available."""
@@ -304,14 +314,19 @@ def main_pipeline(
     wandb.watch(model, log="all", log_freq=100)
 
     # Training Loop
+    min_train_loss = np.inf
     for epoch in range(start_epoch, num_epochs + start_epoch):
         train_loss = train_model(model, train_loader, optimizer, scaler, device, epoch, num_epochs)
         current_lr = optimizer.param_groups[0]["lr"]
         print(f'[Epoch {epoch}/{num_epochs + start_epoch - 1}] Train Loss: {train_loss:.6f} - Current LR: {current_lr:.6f}')
         wandb.log({"epoch": epoch, "train_loss": train_loss, "learning_rate": current_lr}, step=epoch)
 
+        if train_loss < min_train_loss:
+            min_train_loss = train_loss
+            save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, False)
+        
         # Save checkpoint after each epoch
-        save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name)
+        save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, True)
         
         scheduler.step()
 
