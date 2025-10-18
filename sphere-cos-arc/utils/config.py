@@ -1,6 +1,6 @@
 DATASET_PATH = "/root/dfs/callmePhineas/DACN/dataset"
 WORKING_PATH = "/root/dfs/callmePhineas/DACN/sphere-cos-arc"
-CHECKPOINTS_FOLDER_PATH = "/root/dfs/callmePhineas/DACN/checkpoints"
+CHECKPOINTS_FOLDER_PATH = "/root/dfs/callmePhineas/DACN/sphere-cos-arc/checkpoints"
 
 # DATASET_PATH = "/kvm/callmePhineas/DACN/dataset"
 # WORKING_PATH = "/kvm/callmePhineas/DACN/sphere-cos-arc"

@@ -4,6 +4,7 @@
 import os
 import sys
 import time
+import shutil
 import argparse
 from pathlib import Path
 import numpy as np
@@ -248,6 +249,7 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=512)
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--reset-checkpoint', action='store_true', help='Tag --reset-checkpoint to reset checkpoints before training')
     parser.add_argument('--model-save-path', type=str, default=f'{WORKING_PATH}/models')
     parser.add_argument('--wandb-project', type=str, default='face-recognition-training', help='W&B project name')
     return parser.parse_args()
@@ -284,8 +286,20 @@ def main_pipeline(
     start_time = time.time()
     print(f"{'*'*10} {model_name.upper()} MODEL {'*'*10}")
 
+    # Hyperparameters
+    args = parse_args()
+    batch_size = args.batch_size
+    num_epochs = args.epochs
+    learning_rate = args.lr
+    reset_checkpoint = args.reset_checkpoint
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"### Training with batch size {batch_size} - epochs {num_epochs} - lr {learning_rate} ###")
+    print(f"Using: {device}")
+
     # Path setup
     model_checkpoints_path = CHECKPOINTS_FOLDER_PATH
+    if reset_checkpoint and os.path.exists(model_checkpoints_path):
+        shutil.rmtree(model_checkpoints_path)
     os.makedirs(model_checkpoints_path, exist_ok=True)
     model_final_path = f'{model_checkpoints_path}/{model_final_filename}'
     model_best_path = f'{model_checkpoints_path}/{model_best_filename}'
@@ -293,14 +307,6 @@ def main_pipeline(
     os.makedirs(log_folder, exist_ok=True)
     log_file_path = os.path.join(log_folder, f'{model_name.lower()}.txt')
 
-    # Hyperparameters
-    args = parse_args()
-    batch_size = args.batch_size
-    num_epochs = args.epochs
-    learning_rate = args.lr
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"### Training with batch size {batch_size} - epochs {num_epochs} - lr {learning_rate} ###")
-    print(f"Using: {device}")
 
     # Initialize W&B
     wandb.init(
