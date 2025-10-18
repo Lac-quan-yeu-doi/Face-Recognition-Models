@@ -104,7 +104,7 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
-        print(f"Resuming training from {checkpoint_name} - epoch {start_epoch} - {latest_checkpoint}")
+        print(f"### Resuming training from {checkpoint_name} - epoch {start_epoch} - {latest_checkpoint} ###")
         return start_epoch
 
     return 1  # Start from epoch 1 if no checkpoint is found
