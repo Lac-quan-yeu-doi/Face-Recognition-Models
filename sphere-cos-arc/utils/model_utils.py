@@ -249,10 +249,35 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=512)
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--lr', type=float, default=0.01)
-    parser.add_argument('--reset-checkpoint', action='store_true', help='Tag --reset-checkpoint to reset checkpoints before training')
+    parser.add_argument(
+        '--continue_train',
+        nargs='+',  # one or more values
+        help=(
+            "Resume training:\n"
+            "  min_loss [wandb_id]  -> resume from best checkpoint\n"
+            "  latest [wandb_id]    -> resume from latest checkpoint\n"
+            "If not provided, training starts from scratch."
+        ),
+    )
     parser.add_argument('--model-save-path', type=str, default=f'{WORKING_PATH}/models')
-    parser.add_argument('--wandb-project', type=str, default='face-recognition-training', help='W&B project name')
-    return parser.parse_args()
+    parser.add_argument('--wandb-project', type=str, default='face-recognition-training',
+                        help='W&B project name')
+
+    args = parser.parse_args()
+
+    # --- Parse continue_train properly ---
+    if args.continue_train:
+        mode = args.continue_train[0]
+        if mode not in ('min_loss', 'latest'):
+            raise ValueError(f"Invalid --continue_train mode '{mode}', must be 'min_loss' or 'latest'.")
+        args.continue_mode = mode
+        args.wandb_id = args.continue_train[1] if len(args.continue_train) > 1 else None
+    else:
+        args.continue_mode = None
+        args.wandb_id = None
+
+    return args
+
 
 def main_pipeline(
     model_class,
@@ -291,15 +316,29 @@ def main_pipeline(
     batch_size = args.batch_size
     num_epochs = args.epochs
     learning_rate = args.lr
-    reset_checkpoint = args.reset_checkpoint
+    continue_mode = args.continue_mode
+    wandb_id = args.wandb_id
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"### Training with batch size {batch_size} - epochs {num_epochs} - lr {learning_rate} ###")
     print(f"Using: {device}")
 
+    # Training setting setup
+    if continue_mode is None:
+        print("🧠 Training from scratch...")
+    elif continue_mode == 'min_loss':
+        isCheckpoint = False
+        print("🔁 Resuming from best min_loss checkpoint...")
+    elif continue_mode == 'latest':
+        isCheckpoint = True
+        print("🔁 Resuming from latest checkpoint...")
+    else:
+        raise Exception(f"Unknown value {continue_mode}")
+
     # Path setup
     model_checkpoints_path = CHECKPOINTS_FOLDER_PATH
-    if reset_checkpoint and os.path.exists(model_checkpoints_path):
+    if (continue_mode is None) and os.path.exists(model_checkpoints_path):
         shutil.rmtree(model_checkpoints_path)
+        print("Training from scratch, reset all checkpoints...")
     os.makedirs(model_checkpoints_path, exist_ok=True)
     model_final_path = f'{model_checkpoints_path}/{model_final_filename}'
     model_best_path = f'{model_checkpoints_path}/{model_best_filename}'
@@ -308,18 +347,27 @@ def main_pipeline(
     log_file_path = os.path.join(log_folder, f'{model_name.lower()}.txt')
 
 
-    # Initialize W&B
-    wandb.init(
-        project=project_name,
-        config={
-            "batch_size": batch_size,
-            "epochs": num_epochs,
-            "learning_rate": learning_rate,
-            "optimizer": "SGD",
-            "scheduler": "CosineAnnealingLR",
-            "model": model_name
-        }
-    )
+    # --- Initialize WandB ---
+    wandb_config = {
+        "batch_size": batch_size,
+        "epochs": num_epochs,
+        "learning_rate": learning_rate,
+        "optimizer": "SGD",
+        "scheduler": "CosineAnnealingLR",
+        "model": model_name,
+    }
+
+    if continue_mode is None:
+        wandb.init(project=project_name, config=wandb_config)
+    else:
+        if wandb_id is None:
+            raise ValueError("❌ You must provide a W&B run ID when resuming training!")
+        wandb.init(
+            project=project_name,
+            config=wandb_config,
+            id=wandb_id,
+            resume="allow"  
+        )
 
     # Data transformations
     transform = transforms.Compose([
@@ -349,7 +397,7 @@ def main_pipeline(
     scaler = GradScaler()
 
     # Load latest checkpoint if available
-    start_epoch = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, True)
+    start_epoch = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint)
 
     # Watch model in W&B
     wandb.watch(model, log="all", log_freq=100)
@@ -364,10 +412,10 @@ def main_pipeline(
 
         if train_loss < min_train_loss:
             min_train_loss = train_loss
-            save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, False)
+            save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint)
             print("🤖 Save model on min loss")  
             # Save checkpoint after each epoch
-        save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, True)
+        save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint)
         
         scheduler.step()
 
