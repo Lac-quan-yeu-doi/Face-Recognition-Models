@@ -360,7 +360,8 @@ def main_pipeline(
     run = wandb.init(
         project=project_name,
         config=wandb_config,
-        dir=WORKING_PATH)
+        dir=WORKING_PATH
+        )
 
     # Data transformations
     transform = transforms.Compose([
