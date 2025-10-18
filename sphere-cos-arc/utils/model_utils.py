@@ -112,7 +112,7 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
-        print(f"### Resuming training from {checkpoint_name} - epoch {start_epoch} - {latest_checkpoint} ###")
+        print(f"### Resuming training from {checkpoint_name} - epoch {checkpoint['epoch']} - {latest_checkpoint} ###")
         return start_epoch
 
     return 1  # Start from epoch 1 if no checkpoint is found
@@ -357,12 +357,10 @@ def main_pipeline(
         "model": model_name,
     }
 
-    wandb.init(
+    run = wandb.init(
         project=project_name,
         config=wandb_config,
-        dir=WORKING_PATH
-    )
-
+        dir=WORKING_PATH)
 
     # Data transformations
     transform = transforms.Compose([
@@ -400,7 +398,7 @@ def main_pipeline(
     # Training Loop
     min_train_loss = np.inf
     for epoch in range(start_epoch, num_epochs + start_epoch):
-        train_loss = train_model(model, train_loader, optimizer, scaler, device, epoch, num_epochs)
+        train_loss = train_model(model, train_loader, optimizer, scaler, device, epoch, num_epochs + start_epoch - 1)
         current_lr = optimizer.param_groups[0]["lr"]
         print(f'[Epoch {epoch}/{num_epochs + start_epoch - 1}] Train Loss: {train_loss:.6f} - Current LR: {current_lr:.6f}')
         wandb.log({"epoch": epoch, "train_loss": train_loss, "learning_rate": current_lr}, step=epoch)
@@ -409,8 +407,9 @@ def main_pipeline(
             min_train_loss = train_loss
             save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint)
             print("🤖 Save model on min loss")  
-            # Save checkpoint after each epoch
-        save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint)
+
+        # Save checkpoint after each epoch
+        save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, True)
         
         scheduler.step()
 
@@ -463,7 +462,13 @@ def main_pipeline(
     end_time = time.time()
     total_time = end_time - start_time
     print(f"Code runs in {total_time:.2f}s")
-    wandb.finish()
+    
+    artifact = wandb.Artifact("checkpoints", type="model")
+    artifact.add_dir(model_checkpoints_path)
+    run.log_artifact(artifact)
+    run.log({"status": "✅ CHECKPOINTS UPLOADED"})
+
+    run.finish()
 
     return model, best_threshold, best_accuracy, mean_accuracy, std_accuracy
 
