@@ -94,11 +94,11 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         checkpoint_name = 'last checkpoint'
     else:
         # remove the old checkpoints because min_loss may not be the latest
-        print("Remove old checkpoints")
         for f in os.listdir(model_checkpoints_path):
             if f.startswith(f"{model_name}_checkpoint_epoch_") and f.endswith(".pth"):
                 print(f"Remove {f}")
                 os.remove(os.path.join(model_checkpoints_path, f))
+        print("Remove old checkpoints")
 
         checkpoints = [f for f in os.listdir(model_checkpoints_path) 
                        if f == f'{model_name}_min_loss.pth']
@@ -324,10 +324,10 @@ def main_pipeline(
     print(f"Using: {device}")
 
     # Training setting setup
+    isCheckpoint = False
     if continue_train is None:
         print("🧠 Training from scratch...")
     elif continue_train == 'min_loss':
-        isCheckpoint = False
         print("🔁 Resuming from best min_loss checkpoint...")
     elif continue_train == 'latest':
         isCheckpoint = True

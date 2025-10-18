@@ -14,7 +14,7 @@ class CustomStepLR(torch.optim.lr_scheduler._LRScheduler):
 
 SCHEDULER_CONFIGS = {
     "step": {"step_size": 30, "gamma": 0.1},
-    "multistep": {"milestones": [30, 80], "gamma": 0.1},
+    "multistep": {"milestones": [40, 80, 90], "gamma": 0.1},
     # "customstep": {"steps": [10, 15, 20, 22, 24, 26, 28], "ratio": 0.5},
     "customstep": {"steps": [30, 65], "ratio": 0.5},
     "cosine": {"eta_min": 0},
