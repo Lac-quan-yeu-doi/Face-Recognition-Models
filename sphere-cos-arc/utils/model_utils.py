@@ -340,7 +340,6 @@ def main_pipeline(
     os.makedirs(log_folder, exist_ok=True)
     log_file_path = os.path.join(log_folder, f'{model_name.lower()}.txt')
 
-
     # --- Initialize WandB ---
     wandb_config = {
         "batch_size": batch_size,
