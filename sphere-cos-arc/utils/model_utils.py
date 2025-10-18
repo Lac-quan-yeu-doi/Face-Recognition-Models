@@ -365,8 +365,8 @@ def main_pipeline(
         if train_loss < min_train_loss:
             min_train_loss = train_loss
             save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, False)
-        
-        # Save checkpoint after each epoch
+            print("🤖 Save model on min loss")  
+            # Save checkpoint after each epoch
         save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, True)
         
         scheduler.step()
