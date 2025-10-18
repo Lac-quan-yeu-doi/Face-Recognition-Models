@@ -13,7 +13,7 @@ shift  # Remove the first argument (the script name) from $@
 # Default values
 BATCH_SIZE=512
 EPOCHS=100
-LR=0.1
+LR=0.01
 
 # Parse command-line arguments for overrides
 for arg in "$@"; do
