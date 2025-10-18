@@ -24,44 +24,78 @@ from utils.schedulers import get_scheduler
 
 load_dotenv()
 
-def save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint):
-    """Save checkpoint and keep only the 3 latest checkpoints."""
+def save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint=True):
+    """
+    Save a checkpoint or minimum-loss model state, keeping up to 3 latest epoch-based checkpoints.
+
+    Args:
+        model: The PyTorch model to save.
+        optimizer: The optimizer state to save.
+        scheduler: The scheduler state to save.
+        scaler: The GradScaler state for mixed precision training.
+        epoch: Current training epoch.
+        model_checkpoints_path (str): Directory to save checkpoints.
+        model_name (str): Base name for checkpoint files.
+        isCheckpoint (bool): If True, save as epoch-based checkpoint; else, save as min-loss model.
+    """
+    os.makedirs(model_checkpoints_path, exist_ok=True)
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'scaler_state_dict': scaler.state_dict(),
+    }
+    
     if isCheckpoint:
         checkpoint_path = f'{model_checkpoints_path}/{model_name}_checkpoint_epoch_{epoch}.pth'
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'scaler_state_dict': scaler.state_dict(),
-        }, checkpoint_path)
+        torch.save(checkpoint, checkpoint_path)
         
-        # Keep only the 3 latest checkpoints
+        # Keep only the 3 latest epoch-based checkpoints
         checkpoints = sorted(
-            [f for f in os.listdir(model_checkpoints_path) if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
+            [f for f in os.listdir(model_checkpoints_path) 
+             if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
             key=lambda x: int(x.split('_epoch_')[-1].split('.pth')[0])
         )
         while len(checkpoints) > 3:
             os.remove(os.path.join(model_checkpoints_path, checkpoints.pop(0)))
     else:
         checkpoint_path = f'{model_checkpoints_path}/{model_name}_min_loss.pth'
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'scaler_state_dict': scaler.state_dict(),
-        }, checkpoint_path)
+        torch.save(checkpoint, checkpoint_path)
 
-def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device):
-    """Load the latest checkpoint if available."""
+def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint=True):
+    """
+    Load the latest epoch-based checkpoint or the minimum-loss model if available.
+
+    Args:
+        model: The PyTorch model to load state into.
+        optimizer: The optimizer to load state into.
+        scheduler: The scheduler to load state into.
+        scaler: The GradScaler to load state into.
+        model_checkpoints_path (str): Directory containing checkpoints.
+        model_name (str): Base name for checkpoint files.
+        device: Device to map the checkpoint to (e.g., 'cuda' or 'cpu').
+        isCheckpoint (bool): If True, load latest epoch-based checkpoint; else, load min-loss model.
+
+    Returns:
+        int: The epoch to start training from (epoch + 1 from checkpoint, or 1 if none found).
+    """
     if not os.path.exists(model_checkpoints_path):
         return 1
-    checkpoints = sorted(
-        [f for f in os.listdir(model_checkpoints_path) if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
-        key=lambda x: int(x.split('_epoch_')[-1].split('.pth')[0]),
-        reverse=True
-    )
+
+    if isCheckpoint:
+        checkpoints = sorted(
+            [f for f in os.listdir(model_checkpoints_path) 
+             if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
+            key=lambda x: int(x.split('_epoch_')[-1].split('.pth')[0]),
+            reverse=True
+        )
+        checkpoint_name = 'last checkpoint'
+    else:
+        checkpoints = [f for f in os.listdir(model_checkpoints_path) 
+                       if f == f'{model_name}_min_loss.pth']
+        checkpoint_name = 'min_loss_model'
+
     if checkpoints:
         latest_checkpoint = os.path.join(model_checkpoints_path, checkpoints[0])
         checkpoint = torch.load(latest_checkpoint, map_location=device)
@@ -70,8 +104,9 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
-        print(f"Resuming training from checkpoint: {latest_checkpoint} at epoch {start_epoch}")
+        print(f"Resuming training from {checkpoint_name} - epoch {start_epoch} - {latest_checkpoint}")
         return start_epoch
+
     return 1  # Start from epoch 1 if no checkpoint is found
 
 def custom_collate_fn(batch):
@@ -308,7 +343,7 @@ def main_pipeline(
     scaler = GradScaler()
 
     # Load latest checkpoint if available
-    start_epoch = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device)
+    start_epoch = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, True)
 
     # Watch model in W&B
     wandb.watch(model, log="all", log_freq=100)
