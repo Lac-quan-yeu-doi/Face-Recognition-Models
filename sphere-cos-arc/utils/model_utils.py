@@ -85,6 +85,13 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         return 1
 
     if isCheckpoint:
+        # remove the old checkpoints because min_loss may not be the latest
+        print("Remove old checkpoints")
+        for f in os.listdir(model_checkpoints_path):
+            if f.startswith(f"{model_name}_checkpoint_epoch_") and f.endswith(".pth"):
+                print(f"Remove {f}")
+                os.remove(os.path.join(model_checkpoints_path, f))
+
         checkpoints = sorted(
             [f for f in os.listdir(model_checkpoints_path) 
              if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
@@ -286,7 +293,7 @@ def main_pipeline(
 ):
     """
     General function to train and evaluate a face recognition model.
-    
+    [[]]
     Args:
         model_class: The class of the model (e.g., ArcFaceNet, CosFaceNet).
         model_name: Name of the model for logging (e.g., "ArcFace").
@@ -350,7 +357,11 @@ def main_pipeline(
         "model": model_name,
     }
 
-    wandb.init(project=project_name, config=wandb_config)
+    wandb.init(
+        project=project_name,
+        config=wandb_config,
+        dir=WORKING_PATH
+    )
 
 
     # Data transformations
