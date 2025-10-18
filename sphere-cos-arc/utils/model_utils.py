@@ -251,33 +251,28 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument(
         '--continue_train',
-        nargs='+',  # one or more values
+        choices=['min_loss', 'latest'],
         help=(
             "Resume training:\n"
-            "  min_loss [wandb_id]  -> resume from best checkpoint\n"
-            "  latest [wandb_id]    -> resume from latest checkpoint\n"
+            "  min_loss  -> resume from best checkpoint\n"
+            "  latest    -> resume from latest checkpoint\n"
             "If not provided, training starts from scratch."
         ),
     )
-    parser.add_argument('--model-save-path', type=str, default=f'{WORKING_PATH}/models')
-    parser.add_argument('--wandb-project', type=str, default='face-recognition-training',
-                        help='W&B project name')
+    parser.add_argument(
+        '--model-save-path',
+        type=str,
+        default=f'{WORKING_PATH}/models',
+        help='Path to save model checkpoints'
+    )
+    parser.add_argument(
+        '--wandb-project',
+        type=str,
+        default='face-recognition-training',
+        help='W&B project name'
+    )
 
-    args = parser.parse_args()
-
-    # --- Parse continue_train properly ---
-    if args.continue_train:
-        mode = args.continue_train[0]
-        if mode not in ('min_loss', 'latest'):
-            raise ValueError(f"Invalid --continue_train mode '{mode}', must be 'min_loss' or 'latest'.")
-        args.continue_mode = mode
-        args.wandb_id = args.continue_train[1] if len(args.continue_train) > 1 else None
-    else:
-        args.continue_mode = None
-        args.wandb_id = None
-
-    return args
-
+    return parser.parse_args()
 
 def main_pipeline(
     model_class,
@@ -316,27 +311,26 @@ def main_pipeline(
     batch_size = args.batch_size
     num_epochs = args.epochs
     learning_rate = args.lr
-    continue_mode = args.continue_mode
-    wandb_id = args.wandb_id
+    continue_train = args.continue_train
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"### Training with batch size {batch_size} - epochs {num_epochs} - lr {learning_rate} ###")
     print(f"Using: {device}")
 
     # Training setting setup
-    if continue_mode is None:
+    if continue_train is None:
         print("🧠 Training from scratch...")
-    elif continue_mode == 'min_loss':
+    elif continue_train == 'min_loss':
         isCheckpoint = False
         print("🔁 Resuming from best min_loss checkpoint...")
-    elif continue_mode == 'latest':
+    elif continue_train == 'latest':
         isCheckpoint = True
         print("🔁 Resuming from latest checkpoint...")
     else:
-        raise Exception(f"Unknown value {continue_mode}")
+        raise Exception(f"Unknown value {continue_train}")
 
     # Path setup
     model_checkpoints_path = CHECKPOINTS_FOLDER_PATH
-    if (continue_mode is None) and os.path.exists(model_checkpoints_path):
+    if (continue_train is None) and os.path.exists(model_checkpoints_path):
         shutil.rmtree(model_checkpoints_path)
         print("Training from scratch, reset all checkpoints...")
     os.makedirs(model_checkpoints_path, exist_ok=True)
@@ -357,17 +351,8 @@ def main_pipeline(
         "model": model_name,
     }
 
-    if continue_mode is None:
-        wandb.init(project=project_name, config=wandb_config)
-    else:
-        if wandb_id is None:
-            raise ValueError("❌ You must provide a W&B run ID when resuming training!")
-        wandb.init(
-            project=project_name,
-            config=wandb_config,
-            id=wandb_id,
-            resume="allow"  
-        )
+    wandb.init(project=project_name, config=wandb_config)
+
 
     # Data transformations
     transform = transforms.Compose([
