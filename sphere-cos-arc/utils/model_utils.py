@@ -115,7 +115,7 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         start_epoch = checkpoint['epoch'] + 1
         train_loss = checkpoint.get('train_loss', None)
         print(f"### Resuming training from {checkpoint_name} - epoch {checkpoint['epoch']} - {latest_checkpoint} ###")
-        return start_epoch
+        return start_epoch, train_loss
 
     return 1  # Start from epoch 1 if no checkpoint is found
 
