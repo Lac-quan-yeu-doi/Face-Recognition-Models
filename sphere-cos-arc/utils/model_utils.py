@@ -467,7 +467,7 @@ def main_pipeline(
     artifact = wandb.Artifact("checkpoints", type="model")
     artifact.add_dir(model_checkpoints_path)
     run.log_artifact(artifact)
-    run.log({"status": "✅ CHECKPOINTS UPLOADED"})
+    print("✅ CHECKPOINTS UPLOADED")
 
     run.finish()
 
