@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from utils.config import *
 from utils.dataset import CASIAwebfaceDataset, LFWPairDataset
 from utils.optimizers import get_optimizer
-from utils.schedulers import get_scheduler
+from utils.schedulers import *
 
 load_dotenv()
 
@@ -355,7 +355,7 @@ def main_pipeline(
         "epochs": num_epochs,
         "learning_rate": learning_rate,
         "optimizer": "SGD",
-        "scheduler": "CosineAnnealingLR",
+        "scheduler": "CustomStep",
         "model": model_name,
     }
 
@@ -394,6 +394,8 @@ def main_pipeline(
     # Load latest checkpoint if available
     start_epoch, min_train_loss = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint)
     optimizer.param_groups[0]['lr'] = learning_rate
+    if isinstance(scheduler, CustomStepLR):
+        scheduler.last_epoch = start_epoch
 
     # Watch model in W&B
     wandb.watch(model, log="all", log_freq=100)

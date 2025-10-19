@@ -71,7 +71,7 @@ pip install torch torchvision numpy wandb tqdm python-dotenv alive-progress
 1.  **Training Data (CASIA-WebFace)**: Download the CASIA-WebFace dataset and extract it.
 2.  **Evaluation Data (LFW)**: Download the Labeled Faces in the Wild (LFW) dataset and extract it.
 3.  Ensure your final directory structure resembles the following:
-    ```
+    ```p
     /path/to/your/datasets/
     ├── CASIA-webface/
     │   ├── 0000045/
