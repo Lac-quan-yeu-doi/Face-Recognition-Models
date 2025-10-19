@@ -401,7 +401,7 @@ def main_pipeline(
     # Training Loop
     if min_train_loss is None:
         min_train_loss = np.inf
-    
+    print(f"### Train with min_train_loss = {min_train_loss} ### ")
     for epoch in range(start_epoch, num_epochs + start_epoch):
         train_loss = train_model(model, train_loader, optimizer, scaler, device, epoch, num_epochs + start_epoch - 1)
         current_lr = optimizer.param_groups[0]["lr"]
