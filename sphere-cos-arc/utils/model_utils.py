@@ -83,7 +83,7 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         int: The epoch to start training from (epoch + 1 from checkpoint, or 1 if none found).
     """
     if not os.path.exists(model_checkpoints_path):
-        return 1
+        return 1, None
 
     if isCheckpoint:
         checkpoints = sorted(
@@ -117,7 +117,7 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         print(f"### Resuming training from {checkpoint_name} - epoch {checkpoint['epoch']} - {latest_checkpoint} ###")
         return start_epoch, train_loss
 
-    return 1  # Start from epoch 1 if no checkpoint is found
+    return 1, None  # Start from epoch 1 if no checkpoint is found
 
 def custom_collate_fn(batch):
     batch = [item for item in batch if item is not None]
