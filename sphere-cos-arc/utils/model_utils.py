@@ -71,9 +71,9 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
 
     Args:
         model: The PyTorch model to load state into.
-        optimizer: The optimizer to load state into.
-        scheduler: The scheduler to load state into.
-        scaler: The GradScaler to load state into.
+        optimizer: The optimizer to load state into. Update if not None
+        scheduler: The scheduler to load state into. Update if not None
+        scaler: The GradScaler to load state into. Update if not None
         model_checkpoints_path (str): Directory containing checkpoints.
         model_name (str): Base name for checkpoint files.
         device: Device to map the checkpoint to (e.g., 'cuda' or 'cpu').
@@ -109,9 +109,12 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         latest_checkpoint = os.path.join(model_checkpoints_path, checkpoints[0])
         checkpoint = torch.load(latest_checkpoint, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        if optimizer is not None:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if scheduler is not None: 
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        if scaler is not None:
+            scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         train_loss = checkpoint.get('train_loss', None)
         print(f"### Resuming training from {checkpoint_name} - epoch {checkpoint['epoch']} - {latest_checkpoint} ###")
@@ -392,11 +395,11 @@ def main_pipeline(
     scaler = GradScaler()
 
     # Load latest checkpoint if available
-    start_epoch, min_train_loss = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint)
+    start_epoch, min_train_loss = load_latest_checkpoint(model, optimizer, None, scaler, model_checkpoints_path, model_name, device, isCheckpoint)
     optimizer.param_groups[0]['lr'] = learning_rate
     if isinstance(scheduler, CustomStepLR):
         scheduler.last_epoch = start_epoch - 1  # because scheduler will +1 before checking last_epoch in step
-
+        
     # Watch model in W&B
     wandb.watch(model, log="all", log_freq=100)
 
