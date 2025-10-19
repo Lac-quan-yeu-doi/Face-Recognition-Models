@@ -385,13 +385,13 @@ def main_pipeline(
     model = model_class(num_classes=num_classes).to(device)
 
     optimizer = get_optimizer(model, "sgd")
-    optimizer.param_groups[0]['lr'] = learning_rate
     scheduler = get_scheduler(optimizer, "customstep")
 
     scaler = GradScaler()
 
     # Load latest checkpoint if available
     start_epoch = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint)
+    optimizer.param_groups[0]['lr'] = learning_rate
 
     # Watch model in W&B
     wandb.watch(model, log="all", log_freq=100)
