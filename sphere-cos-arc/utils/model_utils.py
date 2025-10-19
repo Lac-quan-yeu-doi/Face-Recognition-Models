@@ -25,7 +25,7 @@ from utils.schedulers import get_scheduler
 
 load_dotenv()
 
-def save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint=True):
+def save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, isCheckpoint=True):
     """
     Save a checkpoint or minimum-loss model state, keeping up to 3 latest epoch-based checkpoints.
 
@@ -42,6 +42,7 @@ def save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoint
     os.makedirs(model_checkpoints_path, exist_ok=True)
     checkpoint = {
         'epoch': epoch,
+        'train_loss': train_loss,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
@@ -112,6 +113,7 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
+        train_loss = checkpoint.get('train_loss', None)
         print(f"### Resuming training from {checkpoint_name} - epoch {checkpoint['epoch']} - {latest_checkpoint} ###")
         return start_epoch
 
@@ -390,14 +392,16 @@ def main_pipeline(
     scaler = GradScaler()
 
     # Load latest checkpoint if available
-    start_epoch = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint)
+    start_epoch, min_train_loss = load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint)
     optimizer.param_groups[0]['lr'] = learning_rate
 
     # Watch model in W&B
     wandb.watch(model, log="all", log_freq=100)
 
     # Training Loop
-    min_train_loss = np.inf
+    if min_train_loss is None:
+        min_train_loss = np.inf
+    
     for epoch in range(start_epoch, num_epochs + start_epoch):
         train_loss = train_model(model, train_loader, optimizer, scaler, device, epoch, num_epochs + start_epoch - 1)
         current_lr = optimizer.param_groups[0]["lr"]
@@ -406,11 +410,11 @@ def main_pipeline(
 
         if train_loss < min_train_loss:
             min_train_loss = train_loss
-            save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, isCheckpoint)
+            save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, isCheckpoint)
             print("🤖 Save model on min loss")  
 
         # Save checkpoint after each epoch
-        save_checkpoint(model, optimizer, scheduler, scaler, epoch, model_checkpoints_path, model_name, True)
+        save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, True)
         
         scheduler.step()
 
