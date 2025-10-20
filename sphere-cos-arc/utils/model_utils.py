@@ -4,6 +4,7 @@
 import os
 import sys
 import time
+import math
 import shutil
 import argparse
 from pathlib import Path
@@ -412,6 +413,9 @@ def main_pipeline(
         current_lr = optimizer.param_groups[0]["lr"]
         print(f'[Epoch {epoch}/{num_epochs + start_epoch - 1}] Train Loss: {train_loss:.6f} - Current LR: {current_lr:.6f}')
         wandb.log({"epoch": epoch, "train_loss": train_loss, "learning_rate": current_lr}, step=epoch)
+
+        if math.isnan(train_loss) or math.isinf(train_loss):
+            raise ValueError(f"🚨 Training stopped: Loss is NaN or Inf at epoch {epoch}")
 
         if train_loss < min_train_loss:
             min_train_loss = train_loss
