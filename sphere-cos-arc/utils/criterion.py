@@ -211,3 +211,57 @@ class CurricularFaceNet(nn.Module):
             loss = self.curricularface(features, labels)
             return loss, features
         return features
+
+class MagFaceLoss(nn.Module):
+    def __init__(self, in_features, num_classes, s=64.0, l_margin=0.45, u_margin=0.8, l_a=10.0, u_a=110.0, lambda_g=35.0):
+        super(MagFaceLoss, self).__init__()
+        self.in_features = in_features
+        self.num_classes = num_classes
+        self.s = s  # Scale: Typically 64.0
+        self.l_margin = l_margin  # Lower margin bound
+        self.u_margin = u_margin  # Upper margin bound
+        self.l_a = l_a  # Lower magnitude bound
+        self.u_a = u_a  # Upper magnitude bound
+        self.lambda_g = lambda_g  # Regularizer weight
+        self.weight = nn.Parameter(torch.Tensor(num_classes, in_features))
+        nn.init.xavier_uniform_(self.weight)
+        print(f"Initialize MagFace with scale {self.s}, l_margin {self.l_margin}, u_margin {self.u_margin}, l_a {self.l_a}, u_a {self.u_a}, lambda_g {self.lambda_g}")
+
+    def forward(self, x, labels):
+        with autocast(device_type='cuda'):
+            w = nn.functional.normalize(self.weight, p=2, dim=1)
+            norm_x = x.norm(p=2, dim=1, keepdim=True)
+            a = torch.clamp(norm_x, min=self.l_a, max=self.u_a)
+            cos_theta = torch.mm(x, w.t()) / norm_x  # cos_theta = (x · w) / ||x|| since ||w||=1
+            batch_size = x.size(0)
+            target_cos_theta = cos_theta[torch.arange(batch_size), labels].view(-1, 1)
+            m_a = (self.u_margin - self.l_margin) / (self.u_a - self.l_a) * (a - self.l_a) + self.l_margin
+            cos_m = torch.cos(m_a)
+            sin_m = torch.sin(m_a)
+            sin_theta = torch.sqrt((1.0 - torch.pow(target_cos_theta, 2)).clamp(0, 1))
+            cos_theta_m = target_cos_theta * cos_m - sin_theta * sin_m
+            thres = torch.cos(torch.pi - m_a)
+            mm = torch.sin(torch.pi - m_a) * m_a
+            final_target_logit = torch.where(target_cos_theta > thres, cos_theta_m, target_cos_theta - mm)
+            cos_theta.scatter_(1, labels.view(-1, 1).long(), final_target_logit.to(cos_theta.dtype))
+            scaled_logits = cos_theta * self.s
+            loss_ce = nn.CrossEntropyLoss()(scaled_logits, labels)
+            g = 1 / a + a / (self.u_a ** 2)
+            loss_g = self.lambda_g * g.mean()
+            loss = loss_ce + loss_g
+        return loss
+
+class MagFaceNet(nn.Module):
+    def __init__(self, num_classes):
+        super(MagFaceNet, self).__init__()
+        self.backbone = resnet50(weights=ResNet50_Weights.DEFAULT)
+        self.backbone.fc = nn.Linear(self.backbone.fc.in_features, FEATURE_DIM)
+        self.magface = MagFaceLoss(in_features=FEATURE_DIM, num_classes=num_classes, s=S_mag, l_margin=M_l_mag, u_margin=M_u_mag, l_a=A_l_mag, u_a=A_u_mag, lambda_g=LAMBDA_g_mag)
+
+    def forward(self, x, labels=None):
+        features = self.backbone(x)
+        if self.training:
+            loss = self.magface(features, labels)
+            return loss, features
+        return features
+

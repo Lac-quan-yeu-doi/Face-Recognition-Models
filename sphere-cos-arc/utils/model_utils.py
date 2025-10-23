@@ -287,6 +287,52 @@ def parse_args():
 
     return parser.parse_args()
 
+def preprocess_dataset(original_path, aligned_path, image_height=112, image_width=96):
+    """
+    Preprocess the dataset by aligning faces using MTCNN and saving to a new directory.
+    
+    Args:
+        original_path: Path to the original dataset directory.
+        aligned_path: Path to save the aligned images.
+        image_height: Height of the output aligned images (default 112).
+        image_width: Width of the output aligned images (default 96).
+    """
+    from facenet_pytorch import MTCNN
+    import torch
+    from torchvision import transforms
+    from PIL import Image
+    import os
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    mtcnn = MTCNN(image_size=112, margin=0, min_face_size=20, thresholds=[0.6, 0.7, 0.7], 
+                   factor=0.709, post_process=False, device=device)
+    
+    resize_transform = transforms.Resize((image_height, image_width))
+
+    os.makedirs(aligned_path, exist_ok=True)
+    
+    for root, dirs, files in os.walk(original_path):
+        rel_path = os.path.relpath(root, original_path)
+        new_root = os.path.join(aligned_path, rel_path)
+        os.makedirs(new_root, exist_ok=True)
+        
+        for file in files:
+            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                img_path = os.path.join(root, file)
+                try:
+                    img = Image.open(img_path).convert('RGB')
+                    aligned = mtcnn(img)
+                    if aligned is not None:
+                        aligned = resize_transform(aligned)
+                        aligned = aligned.permute(1, 2, 0).byte().numpy()  # Convert to numpy array for saving
+                        aligned_img = Image.fromarray(aligned)
+                        aligned_img.save(os.path.join(new_root, file))
+                    else:
+                        print(f"No face detected in {img_path}, skipping alignment.")
+                        # Optionally copy original: shutil.copy(img_path, os.path.join(new_root, file))
+                except Exception as e:
+                    raise Exception(f"Error processing {img_path}: {e}")
+
 def main_pipeline(
     model_class,
     model_name,
@@ -299,16 +345,6 @@ def main_pipeline(
 ):
     """
     General function to train and evaluate a face recognition model.
-    [[]]
-    Args:
-        model_class: The class of the model (e.g., ArcFaceNet, CosFaceNet).
-        model_name: Name of the model for logging (e.g., "ArcFace").
-        project_name: WandB project name (e.g., "arcface-training").
-        model_final_filename: Filename for the final model (e.g., "arcface_final.pth").
-        model_best_filename: Filename for the best model (e.g., "arcface_best.pth").
-        num_classes: Number of classes (identities) in the dataset.
-        working_path: Base path for saving models and logs.
-        dataset_path: Base path for datasets.
     """
     # Initialize WandB
     env_path = Path("../.env")
@@ -369,22 +405,39 @@ def main_pipeline(
         dir=WORKING_PATH
         )
 
+    # Preprocess datasets if not already done
+    aligned_casia_path = f'{dataset_path}/CASIA-WebFace-aligned'
+    if not os.path.exists(aligned_casia_path):
+        print(f"Preprocessing CASIA-WebFace dataset...")
+        preprocess_dataset(f'{dataset_path}/CASIA-WebFace', aligned_casia_path)
+
+    aligned_lfw_path = f'{dataset_path}/Labeled Faces in the Wild (LFW)-aligned'
+    if not os.path.exists(aligned_lfw_path):
+        print(f"Preprocessing LFW dataset...")
+        preprocess_dataset(f'{dataset_path}/Labeled Faces in the Wild (LFW)', aligned_lfw_path)
+
     # Data transformations
-    transform = transforms.Compose([
-        transforms.Resize((112, 112)),
+    train_transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),  # Data augmentation as in the paper
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+    ])
+
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
 
     # Load Datasets
     train_dataset = CASIAwebfaceDataset(
-        root_dir=f'{dataset_path}/CASIA-webface',
-        transform=transform
+        root_dir=aligned_casia_path,
+        transform=train_transform
     )
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
         num_workers=8, collate_fn=custom_collate_fn
     )
+
     print(f"{'#'*20} Data loaded {'#'*20}")
 
     # Initialize Model
@@ -429,14 +482,14 @@ def main_pipeline(
 
     # Combine pairsDevTrain and pairsDevTest for threshold tuning
     train_pairs_dataset = LFWPairDataset(
-        root_dir=f'{dataset_path}/Labeled Faces in the Wild (LFW)',
+        root_dir=aligned_lfw_path,
         pairs_file=f'{dataset_path}/Labeled Faces in the Wild (LFW)/pairsDevTrain.txt',
-        transform=transform
+        transform=test_transform
     )
     test_pairs_dataset = LFWPairDataset(
-        root_dir=f'{dataset_path}/Labeled Faces in the Wild (LFW)',
+        root_dir=aligned_lfw_path,
         pairs_file=f'{dataset_path}/Labeled Faces in the Wild (LFW)/pairsDevTest.txt',
-        transform=transform
+        transform=test_transform
     )
     combined_pairs_dataset = ConcatDataset([train_pairs_dataset, test_pairs_dataset])
 
@@ -462,8 +515,8 @@ def main_pipeline(
         model,
         pairs_file=f'{dataset_path}/Labeled Faces in the Wild (LFW)/pairs.txt',
         batch_size=batch_size,
-        root_dir=f'{dataset_path}/Labeled Faces in the Wild (LFW)',
-        transform=transform,
+        root_dir=aligned_lfw_path,
+        transform=test_transform,
         device=device,
         threshold=best_threshold
     )
@@ -485,5 +538,3 @@ def main_pipeline(
     run.finish()
 
     return model, best_threshold, best_accuracy, mean_accuracy, std_accuracy
-
-
