@@ -12,7 +12,7 @@ This repository provides PyTorch implementations of several state-of-the-art dee
 
 ## Models Implemented
 
-The core of this repository lies in the `sphere-cos-arc` directory, which provides a unified framework for the following margin-based loss functions:
+The core of this repository lies in the `main_code` directory, which provides a unified framework for the following margin-based loss functions:
 
 *   **SphereFace (`sphereface.py`)**: Implements the Angular Softmax (A-Softmax) loss, which introduces an angular margin to the target logit.
 *   **CosFace (`cosface.py`)**: Implements the Large Margin Cosine Loss (LMCL), which adds a cosine margin directly to the target logit.
@@ -20,7 +20,7 @@ The core of this repository lies in the `sphere-cos-arc` directory, which provid
 *   **CurricularFace (`curricular.py`)**: An adaptive curriculum learning approach that applies a margin based on the relative difficulty of training samples.
 *   **FaceNet (`FaceNet/`)**: A separate implementation of the original FaceNet using Triplet Loss with semi-hard online triplet mining.
 
-All models in the `sphere-cos-arc` framework use a pre-trained **ResNet-50** backbone by default.
+All models in the `main_code` framework use a pre-trained **ResNet-50** backbone by default.
 
 ## Repository Structure
 
@@ -32,7 +32,7 @@ All models in the `sphere-cos-arc` framework use a pre-trained **ResNet-50** bac
 │       ├── criterions.py     # Triplet, CosFace, ArcFace loss definitions
 │       └── dataset.py        # LFW dataset loader for triplets
 │
-└── sphere-cos-arc/           # Main framework for margin-based models
+└── main_code/           # Main framework for margin-based models
     ├── arcface.py            # Training script for ArcFace
     ├── cosface.py            # Training script for CosFace
     ├── curricular.py         # Training script for CurricularFace
@@ -91,13 +91,13 @@ pip install torch torchvision numpy wandb tqdm python-dotenv alive-progress
 
 ### Configuration
 
-1.  **File Paths**: Open `sphere-cos-arc/utils/config.py` and update the `DATASET_PATH` and `WORKING_PATH` variables to point to your dataset directory and the repository's `sphere-cos-arc` directory, respectively.
+1.  **File Paths**: Open `main_code/utils/config.py` and update the `DATASET_PATH` and `WORKING_PATH` variables to point to your dataset directory and the repository's `main_code` directory, respectively.
 
     ```python
-    # sphere-cos-arc/utils/config.py
+    # main_code/utils/config.py
     DATASET_PATH = "/path/to/your/datasets"
-    WORKING_PATH = "/path/to/your/repo/sphere-cos-arc"
-    CHECKPOINTS_FOLDER_PATH = "/path/to/your/repo/sphere-cos-arc/checkpoints"
+    WORKING_PATH = "/path/to/your/repo/main_code"
+    CHECKPOINTS_FOLDER_PATH = "/path/to/your/repo/main_code/checkpoints"
     ```
 
 2.  **Weights & Biases**: Create a `.env` file in the root of the repository and add your W&B API key.
@@ -117,22 +117,22 @@ To train a model, execute the `run.sh` script, passing the desired model script 
 
 **1. Train ArcFace with default settings:**
 ```bash
-bash sphere-cos-arc/run.sh sphere-cos-arc/arcface.py
+bash main_code/run.sh main_code/arcface.py
 ```
 
 **2. Train CosFace with a custom batch size and learning rate for 50 epochs:**
 ```bash
-bash sphere-cos-arc/run.sh sphere-cos-arc/cosface.py --batch-size 256 --epochs 50 --lr 0.01
+bash main_code/run.sh main_code/cosface.py --batch-size 256 --epochs 50 --lr 0.01
 ```
 
 **3. Resume training for SphereFace from the latest checkpoint:**
 ```bash
-bash sphere-cos-arc/run.sh sphere-cos-arc/sphereface.py --continue_train latest
+bash main_code/run.sh main_code/sphereface.py --continue_train latest
 ```
 
 **4. Resume training from the best-performing (minimum loss) checkpoint:**
 ```bash
-bash sphere-cos-arc/run.sh sphere-cos-arc/sphereface.py --continue_train min_loss
+bash main_code/run.sh main_code/sphereface.py --continue_train min_loss
 ```
 
 All training logs, model checkpoints, and evaluation results will be logged to your Weights & Biases project and saved locally in the configured `log` and `checkpoints` directories.
