@@ -11,8 +11,8 @@ PYTHON_FILE=$1
 shift  # Remove the first argument (the script name) from $@
 
 # Default values
-BATCH_SIZE=512
-EPOCHS=100
+BATCH_SIZE=2048
+EPOCHS=80
 LR=0.01
 
 # Parse command-line arguments for overrides

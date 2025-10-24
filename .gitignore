@@ -1,0 +1,46 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# --- Virtual environments ---
+.env
+.venv/
+env/
+venv/
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints/
+
+# --- Logs & Outputs ---
+*.log
+*.out
+*.err
+*.pth
+*.pt
+*.ckpt
+
+# --- IDE & Editor ---
+.vscode/
+.idea/
+*.swp
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- Custom project files ---
+# Ignore compiled cache in main_code/utils
+main_code/__pycache__/
+main_code/utils/__pycache__/
+
+# backup
+sphere-cos-arc before wandb/
+# ignore sh file
+pull_server.sh
+push_server.sh
+main_code/push_server.sh
