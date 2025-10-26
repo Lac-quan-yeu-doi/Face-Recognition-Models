@@ -1,4 +1,5 @@
 import os
+import csv
 import random
 from PIL import Image
 from torch.utils.data import Dataset
@@ -133,52 +134,120 @@ class CASIAwebfaceDataset(Dataset):
 
         return image, label
 
+# # Old LFWDataset class for validation
+# class LFWPairDataset(Dataset):
+#     def __init__(self, root_dir, pairs_file, transform=None):
+#         """
+#         Dataset for LFW pairwise verification using pairs.txt.
+#         Args:
+#             root_dir (str): Path to dataset root.
+#             pairs_file (str): Path to pairs.txt file.
+#             transform (callable, optional): torchvision transforms for preprocessing.
+#         """
+#         self.root_dir = root_dir
+#         self.identity_dir = os.path.join(root_dir, 'lfw_funneled')
+#         if not os.path.exists(self.identity_dir):
+#             raise FileNotFoundError(f"Directory {self.identity_dir} does not exist")
+#         self.transform = transform
+#         self.pairs = []
+        
+#         # Parse pairs.txt (format: same identity: name img1 img2; different: name1 img1 name2 img2)
+#         with open(pairs_file, 'r') as f:
+#             lines = f.readlines()[1:]  # Skip header
+#             for line in lines:
+#                 parts = line.strip().split()
+#                 if len(parts) == 3:  # Same identity
+#                     name, img1, img2 = parts
+#                     self.pairs.append((f"{name}/{name}_{img1.zfill(4)}.jpg", 
+#                                      f"{name}/{name}_{img2.zfill(4)}.jpg", 1))
+#                 elif len(parts) == 4:  # Different identities
+#                     name1, img1, name2, img2 = parts
+#                     self.pairs.append((f"{name1}/{name1}_{img1.zfill(4)}.jpg", 
+#                                      f"{name2}/{name2}_{img2.zfill(4)}.jpg", 0))
+    
+#     def __len__(self):
+#         return len(self.pairs)
+    
+#     def __getitem__(self, index):
+#         img1_path, img2_path, same = self.pairs[index]
+#         img1_path = os.path.join(self.identity_dir, img1_path)
+#         img2_path = os.path.join(self.identity_dir, img2_path)
+#         try:
+#             img1 = Image.open(img1_path).convert('RGB')
+#             img2 = Image.open(img2_path).convert('RGB')
+#         except Exception as e:
+#             print(f"Error loading images {img1_path} or {img2_path}: {e}")
+#             return None
+        
+#         if self.transform:
+#             img1 = self.transform(img1)
+#             img2 = self.transform(img2)
+        
+#         return img1, img2, same
+
+# New LWFDataset class for a Phuong class
 class LFWPairDataset(Dataset):
-    def __init__(self, root_dir, pairs_file, transform=None):
+    def __init__(self, root_dir, pairs_files, transform=None):
         """
-        Dataset for LFW pairwise verification using pairs.txt.
+        Dataset for LFW pairwise verification using CSV pair files (e.g., pairs.csv, matchpairs*.csv, mismatchpairs*.csv).
         Args:
-            root_dir (str): Path to dataset root.
-            pairs_file (str): Path to pairs.txt file.
+            root_dir (str): Path to dataset root containing aligned images (e.g., aligned_lfw_path).
+            pairs_files (str or list): Path to a single CSV file (e.g., pairs.csv) or list of CSV files 
+                                       (e.g., [matchpairsDevTrain.csv, mismatchpairsDevTrain.csv]).
             transform (callable, optional): torchvision transforms for preprocessing.
         """
         self.root_dir = root_dir
-        self.identity_dir = os.path.join(root_dir, 'lfw_funneled')
+        self.identity_dir = os.path.join(self.root_dir, "lfw-deepfunneled")
         if not os.path.exists(self.identity_dir):
             raise FileNotFoundError(f"Directory {self.identity_dir} does not exist")
         self.transform = transform
         self.pairs = []
-        
-        # Parse pairs.txt (format: same identity: name img1 img2; different: name1 img1 name2 img2)
-        with open(pairs_file, 'r') as f:
-            lines = f.readlines()[1:]  # Skip header
-            for line in lines:
-                parts = line.strip().split()
-                if len(parts) == 3:  # Same identity
-                    name, img1, img2 = parts
-                    self.pairs.append((f"{name}/{name}_{img1.zfill(4)}.jpg", 
-                                     f"{name}/{name}_{img2.zfill(4)}.jpg", 1))
-                elif len(parts) == 4:  # Different identities
-                    name1, img1, name2, img2 = parts
-                    self.pairs.append((f"{name1}/{name1}_{img1.zfill(4)}.jpg", 
-                                     f"{name2}/{name2}_{img2.zfill(4)}.jpg", 0))
-    
+
+        # Handle single file or list of files
+        if isinstance(pairs_files, str):
+            pairs_files = [pairs_files]
+        elif not isinstance(pairs_files, list):
+            raise ValueError("pairs_files must be a string or list of strings")
+
+        # Parse CSV files
+        for pairs_file in pairs_files:
+            with open(pairs_file, 'r') as f:
+                reader = csv.reader(f)
+                header = next(reader, None)  # Skip header (e.g., name,imagenum1,imagenum2,)
+                if header is None:
+                    raise ValueError(f"Empty or invalid CSV file: {pairs_file}")
+                
+                for row in reader:
+                    if len(row) == 3:  # Matched pair: name,imagenum1,imagenum2
+                        name, img1, img2 = row
+                        img1_path = f"{name}/{name}_{img1.zfill(4)}.jpg"
+                        img2_path = f"{name}/{name}_{img2.zfill(4)}.jpg"
+                        self.pairs.append((img1_path, img2_path, 1))
+                    elif len(row) == 4:  # Mismatched pair: name1,imagenum1,name2,imagenum2
+                        name1, img1, name2, img2 = row
+                        img1_path = f"{name1}/{name1}_{img1.zfill(4)}.jpg"
+                        img2_path = f"{name2}/{name2}_{img2.zfill(4)}.jpg"
+                        self.pairs.append((img1_path, img2_path, 0))
+                    else:
+                        print(f"Skipping invalid row in {pairs_file}: {row}")
+
     def __len__(self):
         return len(self.pairs)
-    
+
     def __getitem__(self, index):
         img1_path, img2_path, same = self.pairs[index]
         img1_path = os.path.join(self.identity_dir, img1_path)
         img2_path = os.path.join(self.identity_dir, img2_path)
+        
         try:
             img1 = Image.open(img1_path).convert('RGB')
             img2 = Image.open(img2_path).convert('RGB')
         except Exception as e:
             print(f"Error loading images {img1_path} or {img2_path}: {e}")
             return None
-        
+
         if self.transform:
             img1 = self.transform(img1)
             img2 = self.transform(img2)
-        
+
         return img1, img2, same

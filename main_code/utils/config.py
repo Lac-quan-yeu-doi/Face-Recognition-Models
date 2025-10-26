@@ -2,14 +2,14 @@ DATASET_PATH = "/root/dfs/callmePhineas/DACN/dataset"
 WORKING_PATH = "/root/dfs/callmePhineas/DACN/sphere-cos-arc"
 CHECKPOINTS_FOLDER_PATH = "/root/dfs/callmePhineas/DACN/sphere-cos-arc/checkpoints"
 
-DATASET_PATH = "/kvm/callmePhineas/DACN/dataset"
-WORKING_PATH = "/kvm/callmePhineas/DACN/result"
-CHECKPOINTS_FOLDER_PATH = "/kvm/callmePhineas/DACN/result/checkpoints"
+# DATASET_PATH = "/kvm/callmePhineas/DACN/dataset"
+# WORKING_PATH = "/kvm/callmePhineas/DACN/result"
+# CHECKPOINTS_FOLDER_PATH = "/kvm/callmePhineas/DACN/result/checkpoints"
 
 
-# DATASET_PATH = "/home/phatvo/callmePhineas/DACN/working/dataset"
-# WORKING_PATH = "/home/phatvo/callmePhineas/DACN/working/result"
-# CHECKPOINTS_FOLDER_PATH = "/home/phatvo/callmePhineas/DACN/working/result/checkpoints"
+DATASET_PATH = "/home/phatvo/callmePhineas/DACN/working/dataset"
+WORKING_PATH = "/home/phatvo/callmePhineas/DACN/working/result"
+CHECKPOINTS_FOLDER_PATH = "/home/phatvo/callmePhineas/DACN/working/result/checkpoints"
 
 
 FEATURE_DIM = 512

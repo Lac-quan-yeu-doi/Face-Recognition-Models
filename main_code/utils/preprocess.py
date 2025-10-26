@@ -4,7 +4,7 @@ from torchvision import transforms
 from PIL import Image
 import os
 
-def preprocess_dataset(original_path, aligned_path, image_height=112, image_width=96):
+def preprocess_dataset(original_path, aligned_path, image_height=112, image_width=112):
     """
     Preprocess the dataset by aligning faces using MTCNN and saving to a new directory.
     
