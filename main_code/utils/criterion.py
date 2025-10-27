@@ -85,10 +85,10 @@ class CosFaceLoss(nn.Module):
 class CosFaceNet(nn.Module):
     def __init__(self, num_classes):
         super(CosFaceNet, self).__init__()
-        # self.backbone = resnet18(weights=ResNet18_Weights.DEFAULT)
-        # self.backbone.fc = nn.Linear(self.backbone.fc.in_features, FEATURE_DIM) 
-        self.backbone = resnet50(weights=ResNet50_Weights.DEFAULT)
+        self.backbone = resnet18(weights=ResNet18_Weights.DEFAULT)
         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, FEATURE_DIM) 
+        # self.backbone = resnet50(weights=ResNet50_Weights.DEFAULT)
+        # self.backbone.fc = nn.Linear(self.backbone.fc.in_features, FEATURE_DIM) 
         # self.backbone = mobilenet_v2(weights=MobileNet_V2_Weights.DEFAULT)
         # self.backbone.classifier[1] = nn.Linear(self.backbone.classifier[1].in_features, 128)  
         # self.backbone = efficientnet_b0(weights=EfficientNet_B0_Weights.DEFAULT)

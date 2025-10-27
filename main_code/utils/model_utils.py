@@ -3,6 +3,7 @@
 # ============================================================
 import os
 import sys
+import csv
 import time
 import math
 import shutil
@@ -212,42 +213,131 @@ def evaluate_lfw_verification(model, pairs_dataset, batch_size, device, threshol
     accuracy = 100 * correct / total
     return accuracy
 
+
+
+# # Old code for cross validation
+# def evaluate_lfw_10fold(model, pairs_file, batch_size, root_dir, transform, device, threshold=0.5):
+#     model.eval()
+#     fold_accuracies = []
+    
+#     with open(pairs_file, 'r') as f:
+#         lines = f.readlines()
+#         header = lines[0].strip().split()
+#         num_folds, num_same, num_diff = map(int, header)
+#         pairs_per_fold = num_same + num_diff
+#         lines = lines[1:]
+    
+#     for fold in range(num_folds):
+#         start_idx = fold * pairs_per_fold
+#         end_idx = (fold + 1) * pairs_per_fold
+#         fold_pairs = []
+#         same_count, diff_count = 0, 0
+#         for line in lines[start_idx:end_idx]:
+#             parts = line.strip().split()
+#             if len(parts) == 3:
+#                 name, img1, img2 = parts
+#                 fold_pairs.append((f"{name}/{name}_{img1.zfill(4)}.jpg", f"{name}/{name}_{img2.zfill(4)}.jpg", 1))
+#                 same_count += 1
+#             elif len(parts) == 4:
+#                 name1, img1, name2, img2 = parts
+#                 fold_pairs.append((f"{name1}/{name1}_{img1.zfill(4)}.jpg", f"{name2}/{name2}_{img2.zfill(4)}.jpg", 0))
+#                 diff_count += 1
+        
+#         temp_dataset = LFWPairDataset(root_dir, pairs_file, transform)
+#         temp_dataset.pairs = fold_pairs
+#         accuracy = evaluate_lfw_verification(model, temp_dataset, batch_size, device, threshold)
+#         fold_accuracies.append(accuracy)
+#         print(f'Fold {fold + 1} Verification Accuracy: {accuracy:.2f}%')
+
+#     mean_accuracy = np.mean(fold_accuracies)
+#     std_accuracy = np.std(fold_accuracies)
+#     return mean_accuracy, std_accuracy
+
 def evaluate_lfw_10fold(model, pairs_file, batch_size, root_dir, transform, device, threshold=0.5):
+    """
+    Perform 10-fold cross-validation on LFW dataset using pairs.csv.
+    Args:
+        model: Trained model for evaluation.
+        pairs_file (str): Path to pairs.csv file.
+        batch_size (int): Batch size for evaluation.
+        root_dir (str): Path to dataset root (e.g., aligned_lfw_path).
+        transform: torchvision transforms for preprocessing.
+        device: Device to run the model (cuda or cpu).
+        threshold (float): Threshold for verification.
+    Returns:
+        mean_accuracy (float): Mean accuracy across 10 folds.
+        std_accuracy (float): Standard deviation of accuracies.
+    """
     model.eval()
     fold_accuracies = []
-    
+    num_folds = 10
+
+    # Load all pairs from pairs.csv
+    all_pairs = []
     with open(pairs_file, 'r') as f:
-        lines = f.readlines()
-        header = lines[0].strip().split()
-        num_folds, num_same, num_diff = map(int, header)
-        pairs_per_fold = num_same + num_diff
-        lines = lines[1:]
-    
+        reader = csv.reader(f)
+        next(reader, None)  # Skip header (e.g., name,imagenum1,imagenum2,)
+        for row in reader:
+            if len(row) == 4 and (row[-1] in ['', ' ']):
+                row = row[:3]
+            if len(row) == 3:  # Matched pair: name,imagenum1,imagenum2
+                name, img1, img2 = row
+                img1_path = f"{name}/{name}_{img1.zfill(4)}.jpg"
+                img2_path = f"{name}/{name}_{img2.zfill(4)}.jpg"
+                all_pairs.append((img1_path, img2_path, 1))
+            elif len(row) == 4:  # Mismatched pair: name1,imagenum1,name2,imagenum2
+                name1, img1, name2, img2 = row
+                img1_path = f"{name1}/{name1}_{img1.zfill(4)}.jpg"
+                img2_path = f"{name2}/{name2}_{img2.zfill(4)}.jpg"
+                all_pairs.append((img1_path, img2_path, 0))
+            else:
+                print(f"Skipping invalid row in {pairs_file}: {row}")
+
+    # Separate matched and mismatched pairs
+    matched_pairs = [p for p in all_pairs if p[2] == 1]
+    mismatched_pairs = [p for p in all_pairs if p[2] == 0]
+
+    # Ensure equal number of matched and mismatched pairs per fold
+    pairs_per_fold = min(len(matched_pairs), len(mismatched_pairs)) // num_folds
+    if pairs_per_fold == 0:
+        raise ValueError("Not enough pairs to distribute across 10 folds")
+
+    # Shuffle pairs to randomize fold assignment
+    np.random.shuffle(matched_pairs)
+    np.random.shuffle(mismatched_pairs)
+
+    # Create 10 folds with stratified sampling
     for fold in range(num_folds):
         start_idx = fold * pairs_per_fold
         end_idx = (fold + 1) * pairs_per_fold
-        fold_pairs = []
-        same_count, diff_count = 0, 0
-        for line in lines[start_idx:end_idx]:
-            parts = line.strip().split()
-            if len(parts) == 3:
-                name, img1, img2 = parts
-                fold_pairs.append((f"{name}/{name}_{img1.zfill(4)}.jpg", f"{name}/{name}_{img2.zfill(4)}.jpg", 1))
-                same_count += 1
-            elif len(parts) == 4:
-                name1, img1, name2, img2 = parts
-                fold_pairs.append((f"{name1}/{name1}_{img1.zfill(4)}.jpg", f"{name2}/{name2}_{img2.zfill(4)}.jpg", 0))
-                diff_count += 1
-        
-        temp_dataset = LFWPairDataset(root_dir, pairs_file, transform)
-        temp_dataset.pairs = fold_pairs
+
+        # Select pairs for this fold
+        fold_matched = matched_pairs[start_idx:end_idx]
+        fold_mismatched = mismatched_pairs[start_idx:end_idx]
+        fold_pairs = fold_matched + fold_mismatched
+
+        # Ensure non-empty fold
+        if not fold_pairs:
+            print(f"Warning: Fold {fold + 1} is empty, skipping")
+            continue
+
+        # Create dataset for this fold
+        temp_dataset = LFWPairDataset(root_dir=root_dir, pairs_files=None, transform=transform)
+        temp_dataset.pairs=fold_pairs
+        # Evaluate accuracy for this fold
         accuracy = evaluate_lfw_verification(model, temp_dataset, batch_size, device, threshold)
         fold_accuracies.append(accuracy)
         print(f'Fold {fold + 1} Verification Accuracy: {accuracy:.2f}%')
 
+    if not fold_accuracies:
+        raise ValueError("No valid folds were evaluated")
+
     mean_accuracy = np.mean(fold_accuracies)
     std_accuracy = np.std(fold_accuracies)
     return mean_accuracy, std_accuracy
+
+
+
 
 def tune_threshold(model, pairs_dataset, batch_size, device, thresholds=np.arange(0.0, 0.35, 0.01)):
     best_threshold = 0.5
@@ -259,7 +349,7 @@ def tune_threshold(model, pairs_dataset, batch_size, device, thresholds=np.arang
         accuracy = evaluate_lfw_verification(model, pairs_dataset, batch_size, device, thresh)
         threshold_list.append(float(thresh))
         accuracy_list.append(float(accuracy))
-        print(f'Threshold {thresh:.2f}: Verification Accuracy {accuracy:.2f}%')
+        print(f'Threshold {thresh:.3f}: Verification Accuracy {accuracy:.3f}%')
         if accuracy > best_accuracy:
             best_accuracy = accuracy
             best_threshold = thresh

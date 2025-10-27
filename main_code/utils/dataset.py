@@ -206,30 +206,31 @@ class LFWPairDataset(Dataset):
         # Handle single file or list of files
         if isinstance(pairs_files, str):
             pairs_files = [pairs_files]
-        elif not isinstance(pairs_files, list):
-            raise ValueError("pairs_files must be a string or list of strings")
+        # elif not isinstance(pairs_files, list):
+        #     raise ValueError("pairs_files must be a string or list of strings")
 
         # Parse CSV files
-        for pairs_file in pairs_files:
-            with open(pairs_file, 'r') as f:
-                reader = csv.reader(f)
-                header = next(reader, None)  # Skip header (e.g., name,imagenum1,imagenum2,)
-                if header is None:
-                    raise ValueError(f"Empty or invalid CSV file: {pairs_file}")
-                
-                for row in reader:
-                    if len(row) == 3:  # Matched pair: name,imagenum1,imagenum2
-                        name, img1, img2 = row
-                        img1_path = f"{name}/{name}_{img1.zfill(4)}.jpg"
-                        img2_path = f"{name}/{name}_{img2.zfill(4)}.jpg"
-                        self.pairs.append((img1_path, img2_path, 1))
-                    elif len(row) == 4:  # Mismatched pair: name1,imagenum1,name2,imagenum2
-                        name1, img1, name2, img2 = row
-                        img1_path = f"{name1}/{name1}_{img1.zfill(4)}.jpg"
-                        img2_path = f"{name2}/{name2}_{img2.zfill(4)}.jpg"
-                        self.pairs.append((img1_path, img2_path, 0))
-                    else:
-                        print(f"Skipping invalid row in {pairs_file}: {row}")
+        if pairs_files is not None:
+            for pairs_file in pairs_files:
+                with open(pairs_file, 'r') as f:
+                    reader = csv.reader(f)
+                    header = next(reader, None)  # Skip header (e.g., name,imagenum1,imagenum2,)
+                    if header is None:
+                        raise ValueError(f"Empty or invalid CSV file: {pairs_file}")
+                    
+                    for row in reader:
+                        if len(row) == 3:  # Matched pair: name,imagenum1,imagenum2
+                            name, img1, img2 = row
+                            img1_path = f"{name}/{name}_{img1.zfill(4)}.jpg"
+                            img2_path = f"{name}/{name}_{img2.zfill(4)}.jpg"
+                            self.pairs.append((img1_path, img2_path, 1))
+                        elif len(row) == 4:  # Mismatched pair: name1,imagenum1,name2,imagenum2
+                            name1, img1, name2, img2 = row
+                            img1_path = f"{name1}/{name1}_{img1.zfill(4)}.jpg"
+                            img2_path = f"{name2}/{name2}_{img2.zfill(4)}.jpg"
+                            self.pairs.append((img1_path, img2_path, 0))
+                        else:
+                            print(f"Skipping invalid row in {pairs_file}: {row}")
 
     def __len__(self):
         return len(self.pairs)
