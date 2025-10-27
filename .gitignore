@@ -38,10 +38,14 @@ Thumbs.db
 main_code/__pycache__/
 main_code/utils/__pycache__/
 
+# files
+main_code/validation_log
+
 # backup
 sphere-cos-arc before wandb/
 main_code/models_evaluation/
 data_a_P/
+
 # ignore sh file
 pull_server.sh
 push_server.sh

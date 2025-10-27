@@ -1,4 +1,5 @@
 from facenet_pytorch import MTCNN
+import shutil
 import torch
 from torchvision import transforms
 from PIL import Image
@@ -15,7 +16,7 @@ def preprocess_dataset(original_path, aligned_path, image_height=112, image_widt
         image_width: Width of the output aligned images (default 96).
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    mtcnn = MTCNN(image_size=112, margin=0, min_face_size=20, thresholds=[0.6, 0.7, 0.7], 
+    mtcnn = MTCNN(image_size=112, margin=0, min_face_size=20, thresholds=[0.5, 0.7, 0.7], 
                    factor=0.709, post_process=False, device=device)
     
     resize_transform = transforms.Resize((image_height, image_width))
@@ -39,7 +40,7 @@ def preprocess_dataset(original_path, aligned_path, image_height=112, image_widt
                         aligned_img = Image.fromarray(aligned)
                         aligned_img.save(os.path.join(new_root, file))
                     else:
-                        print(f"No face detected in {img_path}, skipping alignment.")
-                        # Optionally copy original: shutil.copy(img_path, os.path.join(new_root, file))
+                        print(f"No face detected in {img_path}, skipping alignment. Copy original image")
+                        shutil.copy(img_path, os.path.join(new_root, file))
                 except Exception as e:
                     raise Exception(f"Error processing {img_path}: {e}")
