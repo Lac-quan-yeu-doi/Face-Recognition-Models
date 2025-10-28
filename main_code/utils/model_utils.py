@@ -417,7 +417,7 @@ def main_pipeline(
     # === Model, Opt, Scheduler ===
     model = model_class(num_classes=num_classes, backbone=args.backbone).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
     scheduler = get_scheduler(optimizer, "customstep")
     scaler = GradScaler()
 
