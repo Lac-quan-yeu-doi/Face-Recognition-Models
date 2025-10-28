@@ -121,6 +121,7 @@ class SphereFaceNet(nn.Module):
             m=M_sphere
         )
         self.loss_model = "sphereface"   # for logging / compatibility
+        print(f"Initialize SphereFace model with backbone {backbone}")
 
     # ----------------------------------------------------------------
     def forward(self, x: torch.Tensor, labels: torch.Tensor | None = None):
@@ -210,6 +211,7 @@ class CosFaceNet(nn.Module):
             m=M_cos
         )
         self.loss_model = "cosface"          # for compatibility with your train loop
+        print(f"Initialize CosFace model with backbone {backbone}")
 
     # ----------------------------------------------------------------
     def forward(self, x: torch.Tensor, labels: torch.Tensor | None = None):
@@ -308,6 +310,7 @@ class ArcFaceNet(nn.Module):
             easy_margin=True
         )
         self.loss_model = "arcface"  # For compatibility with do_train
+        print(f"Initialize ArcFace model with backbone {backbone}")
 
     def forward(self, x, labels=None):
         features = self.backbone(x)
@@ -432,6 +435,7 @@ class CurricularFaceNet(nn.Module):
             momentum=MOMENTUM_curricular
         )
         self.loss_model = "curricularface"   # for logging / compatibility
+        print(f"Initialize CurricularFace model with backbone {backbone}")
 
     # ----------------------------------------------------------------
     def forward(self, x, labels):
