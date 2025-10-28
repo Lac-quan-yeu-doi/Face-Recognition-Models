@@ -499,10 +499,10 @@ def main_pipeline(
     torch.save(model.state_dict(), f"{model_checkpoints_path}/{model_final_filename}")
     wandb.save(f"{model_checkpoints_path}/*")
 
-    wandb.finish()
-
     end_time = time.time()
     print(f"Code runs in {end_time - start_time}s")
+    
+    wandb.finish()
 
     return model, best_thresh, mean_acc
 
