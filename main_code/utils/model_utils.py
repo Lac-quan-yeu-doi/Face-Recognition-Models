@@ -339,9 +339,9 @@ def tune_threshold(model, pairs_dataset, batch_size, device, thresholds=np.arang
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch-size', type=int, default=512)
-    parser.add_argument('--epochs', type=int, default=30)
-    parser.add_argument('--lr', type=float, default=0.1)
+    parser.add_argument('--batch_size', '-bs', type=int, default=512)
+    parser.add_argument('--epochs', '-e', type=int, default=30)
+    parser.add_argument('--learning_rate', '-lr', type=float, default=0.1)
     parser.add_argument('--backbone', '-bb', type=str, default='resnet18')
     parser.add_argument('--lambda_g', type=float, default=0.0, help="Magnitude loss weight")
     parser.add_argument('--print_freq', type=int, default=100)
@@ -380,6 +380,14 @@ def main_pipeline(
     working_path,
     dataset_path
 ):
+    # === W&B ===
+    wandb.init(
+        project=project_name,
+        name=model_name,
+        config=vars(args),
+        dir=f'{WORKING_PATH}/wandb'
+    )
+
     start_time = time.time()
     args = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -391,14 +399,7 @@ def main_pipeline(
         print("Training from scratch, reset all checkpoints...")
     os.makedirs(model_checkpoints_path, exist_ok=True)
 
-    # === W&B ===
-    wandb.init(
-        project=project_name,
-        name=model_name,
-        config=vars(args),
-        dir=f'{WORKING_PATH}/wandb'
-    )
-
+    print(f"Training with batch size {args.batch_size} - epochs {args.epochs} - learning rate {args.learning_rate}")
     # === Data ===
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),

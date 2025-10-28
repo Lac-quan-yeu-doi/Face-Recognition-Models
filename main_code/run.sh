@@ -3,7 +3,7 @@
 # Check if a Python file is provided
 if [ -z "$1" ]; then
   echo "❌ Usage: $0 <python_file> [options]"
-  echo "Example: $0 sphereface.py --batch-size 2048 --epochs 30 --lr 0.05"
+  echo "Example: $0 sphereface.py --batch_size 2048 --epochs 30 --learning_rate 0.05"
   exit 1
 fi
 
@@ -25,14 +25,14 @@ for arg in "$@"; do
     --epochs=*)
       EPOCHS="${arg#*=}"
       ;;
-    --lr=*)
+    --learning_rate=*)
       LR="${arg#*=}"
       ;;
   esac
 done
 
 # Print what will actually be run
-echo "🚀 Running: python $PYTHON_FILE --batch-size $BATCH_SIZE --epochs $EPOCHS --lr $LR $@"
+echo "🚀 Running: python $PYTHON_FILE --batch_size $BATCH_SIZE --epochs $EPOCHS --learning_rate $LR $@"
 
 # Run the Python script
-python "$PYTHON_FILE" --batch-size "$BATCH_SIZE" --epochs "$EPOCHS" --lr "$LR" --backbone "$BACKBONE" "$@"
+python "$PYTHON_FILE" --batch_size "$BATCH_SIZE" --epochs "$EPOCHS" --learning_rate "$LR" --backbone "$BACKBONE" "$@"
