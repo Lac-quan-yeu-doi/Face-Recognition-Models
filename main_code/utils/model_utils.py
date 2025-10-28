@@ -32,6 +32,8 @@ from utils.config import *
 from utils.dataset import CASIAwebfaceDataset, LFWPairDataset
 from utils.optimizers import get_optimizer
 from utils.schedulers import *
+from utils.metrics import accuracy
+from utils.utils import AverageMeter, ProgressMeter
 
 load_dotenv()
 
@@ -138,59 +140,79 @@ def custom_collate_fn(batch):
         return None
     return torch.utils.data.dataloader.default_collate(batch)
 
-def train_model(model, train_loader, optimizer, scaler, device, epoch, epochs):
+
+def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch, epochs, args):
     model.train()
-    total_loss = 0
-    loop = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False)
-    for batch in loop:
-        if batch is None:
+    batch_time = AverageMeter('Time', ':6.3f')
+    data_time = AverageMeter('Data', ':6.3f')
+    losses = AverageMeter('Loss', ':.3f')
+    losses_id = AverageMeter('L_ID', ':.3f')
+    losses_mag = AverageMeter('L_mag', ':.6f')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    throughputs = AverageMeter('ThroughPut', ':.2f')
+
+    progress = ProgressMeter(
+        len(train_loader),
+        [batch_time, data_time, throughputs, 'images/s', losses, losses_id, losses_mag, top1, top5],
+        prefix=f"Epoch: [{epoch}/{epochs}]"
+    )
+
+    end = time.time()
+    global iters
+    iters = iters + 1 if 'iters' in globals() else 0
+
+    for i, (images, target) in enumerate(train_loader):
+        if images is None:
             continue
-        images, labels = batch
-        images, labels = images.to(device), labels.to(device)
+
+        data_time.update(time.time() - end)
+        images = images.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+
+        with autocast(device_type='cuda'):
+            output, norm, loss_g, one_hot = model(images, target)
+            cosine_s, logits = output
+            loss_id = criterion(logits, target)
+            loss = loss_id + args.lambda_g * loss_g
+
+        acc1, acc5 = accuracy(cosine_s, target, topk=(1, 5))
+
         optimizer.zero_grad()
-        with autocast_context:
-            loss, _ = model(images, labels)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-        total_loss += loss.item()
-    
-    avg_loss = total_loss / len(train_loader)
-    wandb.log({"train_loss": avg_loss, "epoch": epoch}) 
-    return avg_loss
 
-def evaluate_model(model, test_loader, device):
-    model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        loop = tqdm(test_loader, desc="Evaluating (Classification)", leave=False)
-        for batch in loop:
-            if batch is None:
-                continue
-            images, labels = batch
-            images, labels = images.to(device), labels.to(device)
-            features = model(images)
-            # Compute ArcFace loss
-            loss = model.arcface(features, labels)
-            total_loss += loss.item()
-            # Compute predictions using ArcFace scores
-            features = nn.functional.normalize(features, p=2, dim=1)
-            w = nn.functional.normalize(model.arcface.weight, p=2, dim=1)
-            cos_theta = torch.mm(features, w.t())
-            theta = torch.acos(cos_theta.clamp(-1.0 + 1e-7, 1.0 - 1e-7))
-            one_hot = nn.functional.one_hot(labels, num_classes=model.arcface.num_classes)
-            cos_theta_m = torch.cos(theta + model.arcface.m * one_hot)
-            scaled_logits = model.arcface.s * torch.where(one_hot.bool(), cos_theta_m, cos_theta)
-            _, predicted = torch.max(scaled_logits, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-    
-    avg_loss = total_loss / len(test_loader)
-    accuracy = 100 * correct / total
-    wandb.log({"val_loss": avg_loss, "val_accuracy": accuracy}) 
-    return avg_loss, accuracy
+        batch_size = images.size(0)
+        losses.update(loss.item(), batch_size)
+        losses_id.update(loss_id.item(), batch_size)
+        mag_loss = args.lambda_g * loss_g.item() if isinstance(loss_g, torch.Tensor) else args.lambda_g * loss_g
+        losses_mag.update(mag_loss, batch_size)
+        top1.update(acc1[0], batch_size)
+        top5.update(acc5[0], batch_size)
+        batch_time.update(time.time() - end)
+        end = time.time()
+        throughputs.update(batch_size / (time.time() - end + 1e-8))
+
+        if i % args.print_freq == 0:
+            progress.display(i)
+
+        wandb.log({
+            "loss": loss.item(),
+            "loss_id": loss_id.item(),
+            "loss_mag": mag_loss,
+            "acc1": acc1[0],
+            "acc5": acc5[0],
+            "lr": optimizer.param_groups[0]['lr'],
+            "epoch": epoch,
+            "step": iters
+        }, step=iters)
+
+        iters += 1
+
+    return losses.avg
+
+
 
 def evaluate_lfw_verification(model, pairs_dataset, batch_size, device, threshold=0.5):
     model.eval()
@@ -214,44 +236,6 @@ def evaluate_lfw_verification(model, pairs_dataset, batch_size, device, threshol
     return accuracy
 
 
-
-# # Old code for cross validation
-# def evaluate_lfw_10fold(model, pairs_file, batch_size, root_dir, transform, device, threshold=0.5):
-#     model.eval()
-#     fold_accuracies = []
-    
-#     with open(pairs_file, 'r') as f:
-#         lines = f.readlines()
-#         header = lines[0].strip().split()
-#         num_folds, num_same, num_diff = map(int, header)
-#         pairs_per_fold = num_same + num_diff
-#         lines = lines[1:]
-    
-#     for fold in range(num_folds):
-#         start_idx = fold * pairs_per_fold
-#         end_idx = (fold + 1) * pairs_per_fold
-#         fold_pairs = []
-#         same_count, diff_count = 0, 0
-#         for line in lines[start_idx:end_idx]:
-#             parts = line.strip().split()
-#             if len(parts) == 3:
-#                 name, img1, img2 = parts
-#                 fold_pairs.append((f"{name}/{name}_{img1.zfill(4)}.jpg", f"{name}/{name}_{img2.zfill(4)}.jpg", 1))
-#                 same_count += 1
-#             elif len(parts) == 4:
-#                 name1, img1, name2, img2 = parts
-#                 fold_pairs.append((f"{name1}/{name1}_{img1.zfill(4)}.jpg", f"{name2}/{name2}_{img2.zfill(4)}.jpg", 0))
-#                 diff_count += 1
-        
-#         temp_dataset = LFWPairDataset(root_dir, pairs_file, transform)
-#         temp_dataset.pairs = fold_pairs
-#         accuracy = evaluate_lfw_verification(model, temp_dataset, batch_size, device, threshold)
-#         fold_accuracies.append(accuracy)
-#         print(f'Fold {fold + 1} Verification Accuracy: {accuracy:.2f}%')
-
-#     mean_accuracy = np.mean(fold_accuracies)
-#     std_accuracy = np.std(fold_accuracies)
-#     return mean_accuracy, std_accuracy
 
 def evaluate_lfw_10fold(model, pairs_file, batch_size, root_dir, transform, device, threshold=0.5):
     """
@@ -337,8 +321,6 @@ def evaluate_lfw_10fold(model, pairs_file, batch_size, root_dir, transform, devi
     return mean_accuracy, std_accuracy
 
 
-
-
 def tune_threshold(model, pairs_dataset, batch_size, device, thresholds=np.arange(0.0, 0.35, 0.01)):
     best_threshold = 0.5
     best_accuracy = 0
@@ -356,10 +338,13 @@ def tune_threshold(model, pairs_dataset, batch_size, device, thresholds=np.arang
     return best_threshold, best_accuracy, threshold_list, accuracy_list
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Training')
+    parser = argparse.ArgumentParser()
     parser.add_argument('--batch-size', type=int, default=512)
     parser.add_argument('--epochs', type=int, default=30)
-    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--lr', type=float, default=0.1)
+    parser.add_argument('--backbone', '-bb', type=str, default='resnet18')
+    parser.add_argument('--lambda_g', type=float, default=0.0, help="Magnitude loss weight")
+    parser.add_argument('--print_freq', type=int, default=100)
     parser.add_argument(
         '--continue_train',
         choices=['min_loss', 'latest'],
@@ -382,8 +367,8 @@ def parse_args():
         default='face-recognition-training',
         help='W&B project name'
     )
-
     return parser.parse_args()
+
 
 def main_pipeline(
     model_class,
@@ -393,194 +378,131 @@ def main_pipeline(
     model_best_filename,
     num_classes,
     working_path,
-    dataset_path,
+    dataset_path
 ):
-    """
-    General function to train and evaluate a face recognition model.
-    """
-    # Initialize WandB
-    env_path = Path("../.env")
-    load_dotenv(dotenv_path=env_path)
-    WANDB_API_KEY = os.getenv("WANDB_API_KEY")
-    wandb.login(key=WANDB_API_KEY)
-
     start_time = time.time()
-    print(f"{'*'*10} {model_name.upper()} MODEL {'*'*10}")
-
-    # Hyperparameters
     args = parse_args()
-    batch_size = args.batch_size
-    num_epochs = args.epochs
-    learning_rate = args.lr
-    continue_train = args.continue_train
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"### Training with batch size {batch_size} - epochs {num_epochs} - lr {learning_rate} ###")
-    print(f"Using: {device}")
 
-    # Training setting setup
-    isCheckpoint = False
-    if continue_train is None:
-        print("🧠 Training from scratch...")
-    elif continue_train == 'min_loss':
-        print("🔁 Resuming from best min_loss checkpoint...")
-    elif continue_train == 'latest':
-        isCheckpoint = True
-        print("🔁 Resuming from latest checkpoint...")
-    else:
-        raise Exception(f"Unknown value {continue_train}")
-
-    # Path setup
-    model_checkpoints_path = CHECKPOINTS_FOLDER_PATH
-    if (continue_train is None) and os.path.exists(model_checkpoints_path):
+    # === Paths ===
+    model_checkpoints_path = f"{working_path}/checkpoints/{model_name}"
+    if (args.continue_train is None) and os.path.exists(model_checkpoints_path):
         shutil.rmtree(model_checkpoints_path)
         print("Training from scratch, reset all checkpoints...")
     os.makedirs(model_checkpoints_path, exist_ok=True)
-    model_final_path = f'{model_checkpoints_path}/{model_final_filename}'
-    model_best_path = f'{model_checkpoints_path}/{model_best_filename}'
-    log_folder = f'{working_path}/log'
-    os.makedirs(log_folder, exist_ok=True)
-    log_file_path = os.path.join(log_folder, f'{model_name.lower()}.txt')
-    
-    # --- Initialize WandB ---
-    wandb_config = {
-        "batch_size": batch_size,
-        "epochs": num_epochs,
-        "learning_rate": learning_rate,
-        "optimizer": "SGD",
-        "scheduler": "CustomStep",
-        "model": model_name,
-    }
 
-    run = wandb.init(
+    # === W&B ===
+    wandb.init(
         project=project_name,
-        config=wandb_config,
-        dir=WORKING_PATH
-        )
+        name=model_name,
+        config=vars(args),
+        dir='/home/phatvo/callmePhineas/DACN/working'
+    )
 
-    # Preprocess datasets if not already done
-    aligned_casia_path = f'{dataset_path}/CASIA-webface'
-    aligned_lfw_path = f'{dataset_path}/Labeled Faces in the Wild (LFW)_aligned'
-
-    # Data transformations
+    # === Data ===
     train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),  # Data augmentation as in the paper
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        transforms.Normalize(mean=[0.5]*3, std=[0.5]*3),
     ])
-
     test_transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        transforms.Normalize(mean=[0.5]*3, std=[0.5]*3),
     ])
 
-    # Load Datasets
-    train_dataset = CASIAwebfaceDataset(
-        root_dir=aligned_casia_path,
-        transform=train_transform
-    )
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True,
-        num_workers=8, collate_fn=custom_collate_fn
-    )
+    train_dataset = CASIAwebfaceDataset(root_dir=f"{dataset_path}/CASIA-WebFace", split='train', transform=train_transform)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, collate_fn=custom_collate_fn)
 
-    print(f"{'#'*20} Data loaded {'#'*20}")
-
-    # Initialize Model
-    model = model_class(num_classes=num_classes).to(device)
-
-    optimizer = get_optimizer(model, "sgd")
+    # === Model, Opt, Scheduler ===
+    model = model_class(num_classes=num_classes, backbone=args.backbone).to(device)
+    criterion = nn.CrossEntropyLoss().to(device)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     scheduler = get_scheduler(optimizer, "customstep")
-
     scaler = GradScaler()
 
-    # Load latest checkpoint if available
-    start_epoch, min_train_loss = load_latest_checkpoint(model, optimizer, None, scaler, model_checkpoints_path, model_name, device, isCheckpoint)
-    optimizer.param_groups[0]['lr'] = learning_rate
-    if isinstance(scheduler, CustomStepLR):
-        scheduler.last_epoch = start_epoch - 1  # because scheduler will +1 before checking last_epoch in step
-        
-    # Watch model in W&B
-    wandb.watch(model, log="all", log_freq=100)
-
-    # Training Loop
+    # === Resume ===
+    start_epoch, min_train_loss = load_latest_checkpoint(
+        model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint=(args.continue_train == 'latest')
+    )
     if min_train_loss is None:
-        min_train_loss = np.inf
-    print(f"### Train with min_train_loss = {min_train_loss} ### ")
-    for epoch in range(start_epoch, num_epochs + start_epoch):
-        train_loss = train_model(model, train_loader, optimizer, scaler, device, epoch, num_epochs + start_epoch - 1)
-        current_lr = optimizer.param_groups[0]["lr"]
-        print(f'[Epoch {epoch}/{num_epochs + start_epoch - 1}] Train Loss: {train_loss:.6f} - Current LR: {current_lr:.6f}')
-        wandb.log({"epoch": epoch, "train_loss": train_loss, "learning_rate": current_lr}, step=epoch)
+        min_train_loss = float('inf')
 
-        if math.isnan(train_loss) or math.isinf(train_loss):
-            raise ValueError(f"🚨 Training stopped: Loss is NaN or Inf at epoch {epoch}")
+    # === Training Loop ===
+    for epoch in range(start_epoch, args.epochs + start_epoch):
+        train_loss = train_model(model, train_loader, criterion, optimizer, scaler, device, epoch, args.epochs + start_epoch - 1, args)
 
         if train_loss < min_train_loss:
             min_train_loss = train_loss
-            save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, isCheckpoint)
-            print("🤖 Save model on min loss")  
+            save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, isCheckpoint=False)
+            print(f"New best model saved: {train_loss:.6f}")
 
-        # Save checkpoint after each epoch
-        save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, True)
-        
+        save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, isCheckpoint=True)
         scheduler.step()
 
-    # Combine pairsDevTrain and pairsDevTest for threshold tuning
-    train_pairs_dataset = LFWPairDataset(
+    # === Evaluation ===
+    # Load best model
+    best_path = f"{model_checkpoints_path}/{model_name}_min_loss.pth"
+    if os.path.exists(best_path):
+        checkpoint = torch.load(best_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Threshold tuning
+    aligned_lfw_path = f'{dataset_path}/LFW'
+    match_train_file = f'{dataset_path}/LFW/matchpairsDevTrain.csv'
+    mismatch_train_file = f'{dataset_path}/LFW/mismatchpairsDevTrain.csv'
+    match_test_file = f'{dataset_path}/LFW/matchpairsDevTest.csv'
+    mismatch_test_file = f'{dataset_path}/LFW/mismatchpairsDevTest.csv'
+    pairs_all_file = f'{dataset_path}/LFW/pairs.csv'
+
+    # --- Combine DevTrain + DevTest for threshold tuning ---
+    train_pairs_dataset_match = LFWPairDataset(
         root_dir=aligned_lfw_path,
-        pairs_file=f'{dataset_path}/Labeled Faces in the Wild (LFW)/pairsDevTrain.txt',
+        pairs_files=match_train_file,
         transform=test_transform
     )
-    test_pairs_dataset = LFWPairDataset(
+    train_pairs_dataset_mismatch = LFWPairDataset(
         root_dir=aligned_lfw_path,
-        pairs_file=f'{dataset_path}/Labeled Faces in the Wild (LFW)/pairsDevTest.txt',
+        pairs_files=mismatch_train_file,
         transform=test_transform
     )
-    combined_pairs_dataset = ConcatDataset([train_pairs_dataset, test_pairs_dataset])
-
-    # Tune threshold
-    best_threshold, best_accuracy, threshold_list, accuracy_list = tune_threshold(model, combined_pairs_dataset, batch_size, device)
-    torch.save(model.state_dict(), model_best_path)
-    print(f'Best Threshold: {best_threshold:.2f} - Combined DevTrain+DevTest Accuracy: {best_accuracy:.2f}%')
-    threshold_acc_table = wandb.Table(
-        data=[[t, a] for t, a in zip(threshold_list, accuracy_list)],
-        columns=["threshold", "accuracy"]
-    )
-    wandb.log({
-        "Threshold vs Accuracy": wandb.plot.line(
-            threshold_acc_table,
-            "threshold",
-            "accuracy",
-            title="Threshold vs Accuracy Curve"
-        )
-    })
-
-    # 10-Fold Cross-Validation
-    mean_accuracy, std_accuracy = evaluate_lfw_10fold(
-        model,
-        pairs_file=f'{dataset_path}/Labeled Faces in the Wild (LFW)/pairs.txt',
-        batch_size=batch_size,
+    test_pairs_dataset_match = LFWPairDataset(
         root_dir=aligned_lfw_path,
-        transform=test_transform,
-        device=device,
-        threshold=best_threshold
+        pairs_files=match_test_file,
+        transform=test_transform
     )
-    print(f'LFW 10-Fold Verification Accuracy: {mean_accuracy:.2f}% ± {std_accuracy:.2f}% (Threshold: {best_threshold:.2f})')
+    test_pairs_dataset_mismatch = LFWPairDataset(
+        root_dir=aligned_lfw_path,
+        pairs_files=mismatch_test_file,
+        transform=test_transform
+    )
+    # Combine all pairs for threshold tuning
+    combined = ConcatDataset([
+        train_pairs_dataset_match,
+        train_pairs_dataset_mismatch,
+        test_pairs_dataset_match,
+        test_pairs_dataset_mismatch
+    ])
 
-    # Save Final Model
-    torch.save(model.state_dict(), model_final_path)
-    wandb.save(model_final_path)
+
+    best_thresh, best_acc, t_list, a_list = tune_threshold(model, combined, 512, device, thresholds=np.arange(-0.50, 0.50, 0.002))
+    print(f"Best Threshold: {best_thresh:.3f} → {best_acc:.2f}%")
+
+    # 10-fold LFW
+    mean_acc, std_acc = evaluate_lfw_10fold(
+        model, f"{dataset_path}/LFW/pairs.csv", 512,
+        f"{dataset_path}/LFW", test_transform, device, best_thresh
+    )
+    print(f"LFW 10-Fold: {mean_acc:.2f}% ± {std_acc:.2f}%")
+
+    # Save final
+    torch.save(model.state_dict(), f"{model_checkpoints_path}/{model_final_filename}")
+    wandb.save(f"{model_checkpoints_path}/*")
+
+    wandb.finish()
 
     end_time = time.time()
-    total_time = end_time - start_time
-    print(f"Code runs in {total_time:.2f}s")
-    
-    artifact = wandb.Artifact("checkpoints", type="model")
-    artifact.add_dir(model_checkpoints_path)
-    run.log_artifact(artifact)
-    print("✅ CHECKPOINTS UPLOADED")
+    print(f"Code runs in {end_time - start_time}s")
 
-    run.finish()
+    return model, best_thresh, mean_acc
 
-    return model, best_threshold, best_accuracy, mean_accuracy, std_accuracy
 

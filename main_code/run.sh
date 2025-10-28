@@ -11,9 +11,10 @@ PYTHON_FILE=$1
 shift  # Remove the first argument (the script name) from $@
 
 # Default values
-BATCH_SIZE=512
+BATCH_SIZE=1024
 EPOCHS=200
 LR=0.1
+BACKBONE="resnet18"
 
 # Parse command-line arguments for overrides
 for arg in "$@"; do
@@ -34,4 +35,4 @@ done
 echo "🚀 Running: python $PYTHON_FILE --batch-size $BATCH_SIZE --epochs $EPOCHS --lr $LR $@"
 
 # Run the Python script
-python "$PYTHON_FILE" --batch-size "$BATCH_SIZE" --epochs "$EPOCHS" --lr "$LR" "$@"
+python "$PYTHON_FILE" --batch-size "$BATCH_SIZE" --epochs "$EPOCHS" --lr "$LR" --backbone "$BACKBONE" "$@"

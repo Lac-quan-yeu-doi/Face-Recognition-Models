@@ -39,7 +39,7 @@ main_code/__pycache__/
 main_code/utils/__pycache__/
 
 # files
-main_code/validation_log
+main_code/validation_log*
 
 # backup
 sphere-cos-arc before wandb/

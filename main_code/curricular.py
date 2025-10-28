@@ -13,7 +13,7 @@ import torchvision.transforms as transforms
 if __name__ == '__main__':
     # Load dataset to get number of classes
     train_dataset = CASIAwebfaceDataset(
-        root_dir=f'{DATASET_PATH}/CASIA-webface',
+        root_dir=f'{DATASET_PATH}/CASIA-WebFace',
         transform=transforms.Compose([
             transforms.Resize((112, 112)),
             transforms.ToTensor(),

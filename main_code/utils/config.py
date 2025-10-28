@@ -9,10 +9,10 @@ CHECKPOINTS_FOLDER_PATH = "/root/dfs/callmePhineas/DACN/sphere-cos-arc/checkpoin
 
 DATASET_PATH = "/home/phatvo/callmePhineas/DACN/working/dataset"
 WORKING_PATH = "/home/phatvo/callmePhineas/DACN/working/result"
-CHECKPOINTS_FOLDER_PATH = "/home/phatvo/callmePhineas/DACN/working/result/checkpoints"
 
 
 FEATURE_DIM = 512
+LAMBDA_G = 0.0
 
 # SphereFace
 M_sphere = 2

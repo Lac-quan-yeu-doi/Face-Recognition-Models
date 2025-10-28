@@ -71,7 +71,7 @@ class LFWDataset(Dataset):
         return image, label
 
 class CASIAwebfaceDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
+    def __init__(self, root_dir, split='train', transform=None):
         """
         Dataset structure:
         root/
@@ -89,7 +89,7 @@ class CASIAwebfaceDataset(Dataset):
             transform (callable, optional): torchvision transforms for preprocessing.
         """
         self.root_dir = root_dir
-        self.identity_dir = os.path.join(root_dir, 'casia-webface')
+        self.identity_dir = os.path.join(root_dir, split)
         if not os.path.exists(self.identity_dir):
             raise FileNotFoundError(f"Directory {self.identity_dir} does not exist")
         self.transform = transform

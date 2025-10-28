@@ -13,7 +13,7 @@ import torchvision.transforms as transforms
 if __name__ == '__main__':
     # Load dataset to get number of classes
     train_dataset = CASIAwebfaceDataset(
-        root_dir=f'{DATASET_PATH}/CASIA-webface',
+        root_dir=f'{DATASET_PATH}/CASIA-WebFace',
         transform=transforms.Compose([
             transforms.Resize((112, 112)),
             transforms.ToTensor(),
@@ -33,7 +33,7 @@ if __name__ == '__main__':
                 project_name="arcface-training",
                 model_final_filename="arcface_final.pth",
                 model_best_filename="arcface_best.pth",
-                num_classes=train_dataset.num_of_identities,
+                num_classes=train_dataset.num_of_identities, # 10575 for CASIA-webface
                 working_path=WORKING_PATH,
                 dataset_path=DATASET_PATH
             )
