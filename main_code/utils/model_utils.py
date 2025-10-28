@@ -396,7 +396,7 @@ def main_pipeline(
         project=project_name,
         name=model_name,
         config=vars(args),
-        dir='/home/phatvo/callmePhineas/DACN/working'
+        dir=f'{WORKING_PATH}/wandb'
     )
 
     # === Data ===
