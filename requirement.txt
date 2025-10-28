@@ -1,0 +1,6 @@
+numpy
+tqdm
+alive-progress
+Pillow
+python-dotenv
+wandb
