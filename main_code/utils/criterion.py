@@ -60,48 +60,49 @@ class SphereFace(nn.Module):
         self.lamb = max(self.LambdaMin, self.base * (1 + self.gamma * self.iter) ** (-self.power))
 
         # ---- Cosine similarity (normalized) ----
-        if self.device_id is None:
-            cos_theta = F.linear(F.normalize(input), F.normalize(self.weight))
-        else:
-            # Model parallel (rarely used)
-            x = input
-            sub_weights = torch.chunk(self.weight, len(self.device_id), dim=0)
-            temp_x = x.cuda(self.device_id[0])
-            weight = sub_weights[0].cuda(self.device_id[0])
-            cos_theta = F.linear(F.normalize(temp_x), F.normalize(weight))
-            for i in range(1, len(self.device_id)):
-                temp_x = x.cuda(self.device_id[i])
-                weight = sub_weights[i].cuda(self.device_id[i])
-                cos_theta = torch.cat((
-                    cos_theta,
-                    F.linear(F.normalize(temp_x), F.normalize(weight)).cuda(self.device_id[0])
-                ), dim=1)
+        with autocast(device_type='cuda'):
+            if self.device_id is None:
+                cos_theta = F.linear(F.normalize(input), F.normalize(self.weight))
+            else:
+                # Model parallel (rarely used)
+                x = input
+                sub_weights = torch.chunk(self.weight, len(self.device_id), dim=0)
+                temp_x = x.cuda(self.device_id[0])
+                weight = sub_weights[0].cuda(self.device_id[0])
+                cos_theta = F.linear(F.normalize(temp_x), F.normalize(weight))
+                for i in range(1, len(self.device_id)):
+                    temp_x = x.cuda(self.device_id[i])
+                    weight = sub_weights[i].cuda(self.device_id[i])
+                    cos_theta = torch.cat((
+                        cos_theta,
+                        F.linear(F.normalize(temp_x), F.normalize(weight)).cuda(self.device_id[0])
+                    ), dim=1)
 
-        cos_theta = cos_theta.clamp(-1, 1)
-        cos_theta_cp = cos_theta.clone()
+            cos_theta = cos_theta.clamp(-1, 1)
+            cos_theta_cp = cos_theta.clone()
 
-        # ---- cos(mθ) using Chebyshev ----
-        cos_m_theta = self.mlambda[self.m](cos_theta)
+            # ---- cos(mθ) using Chebyshev ----
+            cos_m_theta = self.mlambda[self.m](cos_theta)
 
-        # ---- Compute θ and k ----
-        theta = cos_theta.data.acos()  # [N, C]
-        k = (self.m * theta / math.pi).floor()
+            # ---- Compute θ and k ----
+            theta = cos_theta.data.acos()  # [N, C]
+            k = (self.m * theta / math.pi).floor()
 
-        # ---- phi(θ) = (-1)^k * cos(mθ) - 2k ----
-        phi_theta = ((-1.0) ** k) * cos_m_theta - 2 * k
+            # ---- phi(θ) = (-1)^k * cos(mθ) - 2k ----
+            phi_theta = ((-1.0) ** k) * cos_m_theta - 2 * k
 
-        # ---- Feature norms ----
-        NormOfFeature = torch.norm(input, p=2, dim=1, keepdim=True)  # [N, 1]
+            # ---- Feature norms ----
+            NormOfFeature = torch.norm(input, p=2, dim=1, keepdim=True)  # [N, 1]
 
-        # ---- One-hot ----
-        one_hot = torch.zeros_like(cos_theta)
-        if self.device_id is not None:
-            one_hot = one_hot.cuda(self.device_id[0])
-        one_hot.scatter_(1, label.view(-1, 1), 1)
+            # ---- One-hot ----
+            one_hot = torch.zeros_like(cos_theta)
+            if self.device_id is not None:
+                one_hot = one_hot.cuda(self.device_id[0])
+            one_hot.scatter_(1, label.view(-1, 1), 1)
 
-        # ---- Final output (with annealing) ----
-        output = (one_hot * (phi_theta - cos_theta) / (1 + self.lamb)) + cos_theta
-        output = output * NormOfFeature
+            # ---- Final output (with annealing) ----
+            output = (one_hot * (phi_theta - cos_theta) / (1 + self.lamb)) + cos_theta
+            output = output * NormOfFeature
 
         return [cos_theta_cp * NormOfFeature, output], NormOfFeature, 0, one_hot
 
@@ -167,30 +168,31 @@ class CosFace(nn.Module):
         Returns:
             [cosine*s, logits], norms, loss_g, one_hot
         """
-        # L2-normalise both sides
-        embeds_norm = F.normalize(embeddings, dim=1)          # [N, D]
-        weight_norm = F.normalize(self.kernel, dim=0)         # [D, C]
+        with autocast(device_type='cuda'):
+            # L2-normalise both sides
+            embeds_norm = F.normalize(embeddings, dim=1)          # [N, D]
+            weight_norm = F.normalize(self.kernel, dim=0)         # [D, C]
 
-        cosine = torch.mm(embeds_norm, weight_norm)           # [N, C]
-        cosine = cosine.clamp(-1 + self.eps, 1 - self.eps)    # stability
+            cosine = torch.mm(embeds_norm, weight_norm)           # [N, C]
+            cosine = cosine.clamp(-1 + self.eps, 1 - self.eps)    # stability
 
-        cosine_cp = cosine.clone()
+            cosine_cp = cosine.clone()
 
-        # one-hot mask for target class
-        one_hot = torch.zeros(cosine.size(), device=cosine.device)
-        one_hot.scatter_(1, label.view(-1, 1), 1.0)
+            # one-hot mask for target class
+            one_hot = torch.zeros(cosine.size(), device=cosine.device)
+            one_hot.scatter_(1, label.view(-1, 1), 1.0)
 
-        # ----- additive margin only on target class -----
-        cosine = cosine - one_hot * self.m
+            # ----- additive margin only on target class -----
+            cosine = cosine - one_hot * self.m
 
-        # final logits
-        logits = cosine * self.s
+            # final logits
+            logits = cosine * self.s
 
-        # feature norm (for MagFace / auxiliary loss)
-        norms = torch.norm(embeddings, dim=1, keepdim=True)
+            # feature norm (for MagFace / auxiliary loss)
+            norms = torch.norm(embeddings, dim=1, keepdim=True)
 
-        # loss_g = 0  (placeholder – set >0 in MagFace)
-        loss_g = 0
+            # loss_g = 0  (placeholder – set >0 in MagFace)
+            loss_g = 0
 
         return [cosine_cp * self.s, logits], norms, loss_g, one_hot
 
@@ -256,44 +258,45 @@ class ArcFace(nn.Module):
         return self.weight[:, labels].clone().detach()
 
     def forward(self, input, label):
-        # L2 normalize input and weight
-        input_norm = F.normalize(input)
-        weight_norm = F.normalize(self.weight)
+        with autocast(device_type='cuda'):
+            # L2 normalize input and weight
+            input_norm = F.normalize(input)
+            weight_norm = F.normalize(self.weight)
 
-        if self.device_id is None:
-            cosine = F.linear(input_norm, weight_norm)  # [N, C]
-        else:
-            # Model parallel support (chunk weights across GPUs)
-            x = input
-            sub_weights = torch.chunk(self.weight, len(self.device_id), dim=0)
-            temp_x = x.cuda(self.device_id[0])
-            weight = sub_weights[0].cuda(self.device_id[0])
-            cosine = F.linear(F.normalize(temp_x), F.normalize(weight))
-            for i in range(1, len(self.device_id)):
-                temp_x = x.cuda(self.device_id[i])
-                weight = sub_weights[i].cuda(self.device_id[i])
-                cosine = torch.cat((cosine, F.linear(F.normalize(temp_x), F.normalize(weight)).cuda(self.device_id[0])), dim=1)
+            if self.device_id is None:
+                cosine = F.linear(input_norm, weight_norm)  # [N, C]
+            else:
+                # Model parallel support (chunk weights across GPUs)
+                x = input
+                sub_weights = torch.chunk(self.weight, len(self.device_id), dim=0)
+                temp_x = x.cuda(self.device_id[0])
+                weight = sub_weights[0].cuda(self.device_id[0])
+                cosine = F.linear(F.normalize(temp_x), F.normalize(weight))
+                for i in range(1, len(self.device_id)):
+                    temp_x = x.cuda(self.device_id[i])
+                    weight = sub_weights[i].cuda(self.device_id[i])
+                    cosine = torch.cat((cosine, F.linear(F.normalize(temp_x), F.normalize(weight)).cuda(self.device_id[0])), dim=1)
 
-        cosine_cp = cosine.clone()
-        sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(1e-9, 1.0))
-        phi = cosine * self.cos_m - sine * self.sin_m
+            cosine_cp = cosine.clone()
+            sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(1e-9, 1.0))
+            phi = cosine * self.cos_m - sine * self.sin_m
 
-        if self.easy_margin:
-            phi = torch.where(cosine > 0, phi, cosine)
-        else:
-            phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+            if self.easy_margin:
+                phi = torch.where(cosine > 0, phi, cosine)
+            else:
+                phi = torch.where(cosine > self.th, phi, cosine - self.mm)
 
-        # One-hot encoding
-        one_hot = torch.zeros_like(cosine)
-        one_hot.scatter_(1, label.view(-1, 1), 1)
+            # One-hot encoding
+            one_hot = torch.zeros_like(cosine)
+            one_hot.scatter_(1, label.view(-1, 1), 1)
 
-        # Combine: target gets phi, others get cosine
-        output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
-        output = output * self.s  # Scale
+            # Combine: target gets phi, others get cosine
+            output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
+            output = output * self.s  # Scale
 
-        # Feature norm (for potential MagFace-style loss)
-        norms = torch.norm(input, dim=1, keepdim=True)
-        loss_g = 0  # Placeholder — set in MagFace or similar
+            # Feature norm (for potential MagFace-style loss)
+            norms = torch.norm(input, dim=1, keepdim=True)
+            loss_g = 0  # Placeholder — set in MagFace or similar
 
         return [cosine_cp * self.s, output], norms, loss_g, one_hot
 
@@ -313,6 +316,7 @@ class ArcFaceNet(nn.Module):
         print(f"Initialize ArcFace model with backbone {backbone}")
 
     def forward(self, x, labels=None):
+
         features = self.backbone(x)
         if self.training:
             assert labels is not None
@@ -365,55 +369,56 @@ class CurricularFace(nn.Module):
         Returns:
             [origin_cos*s, logits], norms, loss_g, one_hot
         """
-        # ---- feature norms (for MagFace / logging) ----
-        norms = torch.norm(feats, dim=1, keepdim=True)          # [N, 1]
+        with autocast(device_type='cuda'):
+            # ---- feature norms (for MagFace / logging) ----
+            norms = torch.norm(feats, dim=1, keepdim=True)          # [N, 1]
 
-        # ---- L2-normalise both sides ----
-        kernel_norm = F.normalize(self.kernel, dim=0)           # [D, C]
-        feats_norm  = F.normalize(feats, dim=1)                 # [N, D]
+            # ---- L2-normalise both sides ----
+            kernel_norm = F.normalize(self.kernel, dim=0)           # [D, C]
+            feats_norm  = F.normalize(feats, dim=1)                 # [N, D]
 
-        # ---- cosine similarity ----
-        cos_theta = torch.mm(feats_norm, kernel_norm)           # [N, C]
-        cos_theta = cos_theta.clamp(-1, 1)
+            # ---- cosine similarity ----
+            cos_theta = torch.mm(feats_norm, kernel_norm)           # [N, C]
+            cos_theta = cos_theta.clamp(-1, 1)
 
-        # keep a copy for accuracy (pre-margin)
-        origin_cos = cos_theta.clone()
+            # keep a copy for accuracy (pre-margin)
+            origin_cos = cos_theta.clone()
 
-        # ---- target logits ----
-        target_logit = cos_theta[torch.arange(feats.size(0)), labels].view(-1, 1)
+            # ---- target logits ----
+            target_logit = cos_theta[torch.arange(feats.size(0)), labels].view(-1, 1)
 
-        # cos(θ + m)
-        sin_theta   = torch.sqrt(1.0 - torch.pow(target_logit, 2))
-        cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m
+            # cos(θ + m)
+            sin_theta   = torch.sqrt(1.0 - torch.pow(target_logit, 2))
+            cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m
 
-        # mask: non-target cosine > cos(θ + m)
-        mask = cos_theta > cos_theta_m
+            # mask: non-target cosine > cos(θ + m)
+            mask = cos_theta > cos_theta_m
 
-        # final target logit (only apply full margin if target is hard enough)
-        final_target_logit = torch.where(
-            target_logit > self.threshold,
-            cos_theta_m,
-            target_logit - self.mm
-        )
+            # final target logit (only apply full margin if target is hard enough)
+            final_target_logit = torch.where(
+                target_logit > self.threshold,
+                cos_theta_m,
+                target_logit - self.mm
+            ).to(cos_theta.dtype)
 
-        # ---- curriculum: adaptive scaling of hard negatives ----
-        hard_example = cos_theta[mask]
-        with torch.no_grad():
-            # EMA update: t = momentum * mean_target + (1-momentum) * t
-            self.t = (target_logit.mean() * self.momentum +
-                      (1 - self.momentum) * self.t).to(hard_example.dtype)
+            # ---- curriculum: adaptive scaling of hard negatives ----
+            hard_example = cos_theta[mask]
+            with torch.no_grad():
+                # EMA update: t = momentum * mean_target + (1-momentum) * t
+                self.t = (target_logit.mean() * self.momentum +
+                        (1 - self.momentum) * self.t).to(hard_example.dtype)
 
-        cos_theta[mask] = hard_example * (self.t + hard_example)
+            cos_theta[mask] = hard_example * (self.t + hard_example)
 
-        # replace target column
-        cos_theta.scatter_(1, labels.view(-1, 1), final_target_logit)
+            # replace target column
+            cos_theta.scatter_(1, labels.view(-1, 1), final_target_logit)
 
-        # final scaled logits
-        logits = cos_theta * self.s
+            # final scaled logits
+            logits = cos_theta * self.s
 
-        # one-hot for analysis / debugging
-        one_hot = torch.zeros_like(cos_theta)
-        one_hot.scatter_(1, labels.view(-1, 1), 1)
+            # one-hot for analysis / debugging
+            one_hot = torch.zeros_like(cos_theta)
+            one_hot.scatter_(1, labels.view(-1, 1), 1)
 
         return [origin_cos * self.s, logits], norms, 0, one_hot
 
@@ -438,7 +443,7 @@ class CurricularFaceNet(nn.Module):
         print(f"Initialize CurricularFace model with backbone {backbone}")
 
     # ----------------------------------------------------------------
-    def forward(self, x, labels):
+    def forward(self, x, labels=None):
         feats = self.backbone(x)                 # [N, FEATURE_DIM]
 
         if self.training:
