@@ -380,6 +380,10 @@ def main_pipeline(
     working_path,
     dataset_path
 ):
+    start_time = time.time()
+    args = parse_args()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     # === W&B ===
     wandb.init(
         project=project_name,
@@ -388,10 +392,6 @@ def main_pipeline(
         dir=f'{WORKING_PATH}/wandb'
     )
 
-    start_time = time.time()
-    args = parse_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     # === Paths ===
     model_checkpoints_path = f"{working_path}/checkpoints/{model_name}"
     if (args.continue_train is None) and os.path.exists(model_checkpoints_path):
@@ -399,7 +399,7 @@ def main_pipeline(
         print("Training from scratch, reset all checkpoints...")
     os.makedirs(model_checkpoints_path, exist_ok=True)
 
-    print(f"Training with batch size {args.batch_size} - epochs {args.epochs} - learning rate {args.learning_rate}")
+    print(f"Training using {device} - batch size {args.batch_size} - epochs {args.epochs} - learning rate {args.learning_rate}")
     # === Data ===
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
