@@ -310,7 +310,7 @@ class ArcFaceNet(nn.Module):
             num_classes=num_classes,
             s=S_arc,
             m=M_arc,
-            easy_margin=True
+            easy_margin=False
         )
         self.loss_model = "arcface"  # For compatibility with do_train
         print(f"Initialize ArcFace model with backbone {backbone}")
@@ -323,134 +323,6 @@ class ArcFaceNet(nn.Module):
             output = self.arcface(features, labels)
             return output  # [cosine*s, logits], norms, loss_g, one_hot
         return features
-
-class CurricularFace(nn.Module):
-    """
-    CurricularFace: Adaptive Curriculum Learning Loss for Deep Face Recognition
-    Paper: https://arxiv.org/abs/2004.00288
-    """
-    def __init__(self,
-                 feat_dim: int,
-                 num_class: int,
-                 m: float = 0.5,
-                 s: float = 64.0,
-                 momentum: float = 0.01):
-        super().__init__()
-        self.m = m
-        self.s = s
-        self.momentum = momentum
-
-        self.cos_m = math.cos(m)
-        self.sin_m = math.sin(m)
-        self.threshold = math.cos(math.pi - m)      # thres
-        self.mm = math.sin(math.pi - m) * m
-
-        # ---- class prototypes (kernel) ----
-        self.kernel = nn.Parameter(torch.empty(feat_dim, num_class))
-        nn.init.normal_(self.kernel, std=0.01)
-
-        # EMA of target cosine (curriculum difficulty)
-        self.register_buffer('t', torch.zeros(1))
-
-        print(f"init CurricularFace → s={self.s:.2f}, m={self.m:.3f}, momentum={self.momentum:.3f}")
-
-    # --------------------------------------------------------------------
-    def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
-        """Return raw class centers for given labels."""
-        return self.kernel[:, labels].clone().detach()
-
-    # --------------------------------------------------------------------
-    def forward(self, feats: torch.Tensor, labels: torch.Tensor):
-        """
-        Args:
-            feats:  [N, feat_dim]  (raw backbone features)
-            labels: [N]            (class indices)
-
-        Returns:
-            [origin_cos*s, logits], norms, loss_g, one_hot
-        """
-        with autocast(device_type='cuda'):
-            # ---- feature norms (for MagFace / logging) ----
-            norms = torch.norm(feats, dim=1, keepdim=True)          # [N, 1]
-
-            # ---- L2-normalise both sides ----
-            kernel_norm = F.normalize(self.kernel, dim=0)           # [D, C]
-            feats_norm  = F.normalize(feats, dim=1)                 # [N, D]
-
-            # ---- cosine similarity ----
-            cos_theta = torch.mm(feats_norm, kernel_norm)           # [N, C]
-            cos_theta = cos_theta.clamp(-1, 1)
-
-            # keep a copy for accuracy (pre-margin)
-            origin_cos = cos_theta.clone()
-
-            # ---- target logits ----
-            target_logit = cos_theta[torch.arange(feats.size(0)), labels].view(-1, 1)
-
-            # cos(θ + m)
-            sin_theta   = torch.sqrt(1.0 - torch.pow(target_logit, 2))
-            cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m
-
-            # mask: non-target cosine > cos(θ + m)
-            mask = cos_theta > cos_theta_m
-
-            # final target logit (only apply full margin if target is hard enough)
-            final_target_logit = torch.where(
-                target_logit > self.threshold,
-                cos_theta_m,
-                target_logit - self.mm
-            ).to(cos_theta.dtype)
-
-            # ---- curriculum: adaptive scaling of hard negatives ----
-            hard_example = cos_theta[mask]
-            with torch.no_grad():
-                # EMA update: t = momentum * mean_target + (1-momentum) * t
-                self.t = (target_logit.mean() * self.momentum +
-                        (1 - self.momentum) * self.t).to(hard_example.dtype)
-
-            cos_theta[mask] = hard_example * (self.t + hard_example)
-
-            # replace target column
-            cos_theta.scatter_(1, labels.view(-1, 1), final_target_logit)
-
-            # final scaled logits
-            logits = cos_theta * self.s
-
-            # one-hot for analysis / debugging
-            one_hot = torch.zeros_like(cos_theta)
-            one_hot.scatter_(1, labels.view(-1, 1), 1)
-
-        return [origin_cos * self.s, logits], norms, 0, one_hot
-
-class CurricularFaceNet(nn.Module):
-    """
-    Backbone → embedding → CurricularFace head
-    """
-    def __init__(self, num_classes: int, backbone):
-        super().__init__()
-        # ----- backbone (feel free to swap) -----
-        self.backbone = get_backbone(backbone)
-
-        # ----- CurricularFace head -----
-        self.curricular = CurricularFace(
-            feat_dim=FEATURE_DIM,
-            num_class=num_classes,
-            m=M_curricular,
-            s=S_curricular,
-            momentum=MOMENTUM_curricular
-        )
-        self.loss_model = "curricularface"   # for logging / compatibility
-        print(f"Initialize CurricularFace model with backbone {backbone}")
-
-    # ----------------------------------------------------------------
-    def forward(self, x, labels=None):
-        feats = self.backbone(x)                 # [N, FEATURE_DIM]
-
-        if self.training:
-            assert labels is not None
-            return self.curricular(feats, labels)   # → [origin*s, logits], norms, loss_g, one_hot
-        else:
-            return feats
 
 class MV_Softmax(nn.Module):
     """
@@ -615,6 +487,310 @@ class MV_SoftmaxNet(nn.Module):
             return self.mv_head(feats, labels)
         else:
             return feats
+ 
+class CurricularFace(nn.Module):
+    """
+    CurricularFace: Adaptive Curriculum Learning Loss for Deep Face Recognition
+    Paper: https://arxiv.org/abs/2004.00288
+    """
+    def __init__(self,
+                 feat_dim: int,
+                 num_class: int,
+                 m: float = 0.5,
+                 s: float = 64.0,
+                 momentum: float = 0.01):
+        super().__init__()
+        self.m = m
+        self.s = s
+        self.momentum = momentum
+
+        self.cos_m = math.cos(m)
+        self.sin_m = math.sin(m)
+        self.threshold = math.cos(math.pi - m)      # thres
+        self.mm = math.sin(math.pi - m) * m
+
+        # ---- class prototypes (kernel) ----
+        self.kernel = nn.Parameter(torch.empty(feat_dim, num_class))
+        nn.init.normal_(self.kernel, std=0.01)
+
+        # EMA of target cosine (curriculum difficulty)
+        self.register_buffer('t', torch.zeros(1))
+
+        print(f"init CurricularFace → s={self.s:.2f}, m={self.m:.3f}, momentum={self.momentum:.3f}")
+
+    # --------------------------------------------------------------------
+    def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
+        """Return raw class centers for given labels."""
+        return self.kernel[:, labels].clone().detach()
+
+    # --------------------------------------------------------------------
+    def forward(self, feats: torch.Tensor, labels: torch.Tensor):
+        """
+        Args:
+            feats:  [N, feat_dim]  (raw backbone features)
+            labels: [N]            (class indices)
+
+        Returns:
+            [origin_cos*s, logits], norms, loss_g, one_hot
+        """
+        with autocast(device_type='cuda'):
+            # ---- feature norms (for MagFace / logging) ----
+            norms = torch.norm(feats, dim=1, keepdim=True)          # [N, 1]
+
+            # ---- L2-normalise both sides ----
+            kernel_norm = F.normalize(self.kernel, dim=0)           # [D, C]
+            feats_norm  = F.normalize(feats, dim=1)                 # [N, D]
+
+            # ---- cosine similarity ----
+            cos_theta = torch.mm(feats_norm, kernel_norm)           # [N, C]
+            cos_theta = cos_theta.clamp(-1, 1)
+
+            # keep a copy for accuracy (pre-margin)
+            origin_cos = cos_theta.clone()
+
+            # ---- target logits ----
+            target_logit = cos_theta[torch.arange(feats.size(0)), labels].view(-1, 1)
+
+            # cos(θ + m)
+            sin_theta   = torch.sqrt(1.0 - torch.pow(target_logit, 2))
+            cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m
+
+            # mask: non-target cosine > cos(θ + m)
+            mask = cos_theta > cos_theta_m
+
+            # final target logit (only apply full margin if target is hard enough)
+            final_target_logit = torch.where(
+                target_logit > self.threshold,
+                cos_theta_m,
+                target_logit - self.mm
+            ).to(cos_theta.dtype)
+
+            # ---- curriculum: adaptive scaling of hard negatives ----
+            hard_example = cos_theta[mask]
+            with torch.no_grad():
+                # EMA update: t = momentum * mean_target + (1-momentum) * t
+                self.t = (target_logit.mean() * self.momentum +
+                        (1 - self.momentum) * self.t).to(hard_example.dtype)
+
+            cos_theta[mask] = hard_example * (self.t + hard_example)
+
+            # replace target column
+            cos_theta.scatter_(1, labels.view(-1, 1), final_target_logit)
+
+            # final scaled logits
+            logits = cos_theta * self.s
+
+            # one-hot for analysis / debugging
+            one_hot = torch.zeros_like(cos_theta)
+            one_hot.scatter_(1, labels.view(-1, 1), 1)
+
+        return [origin_cos * self.s, logits], norms, 0, one_hot
+
+class CurricularFaceNet(nn.Module):
+    """
+    Backbone → embedding → CurricularFace head
+    """
+    def __init__(self, num_classes: int, backbone):
+        super().__init__()
+        # ----- backbone (feel free to swap) -----
+        self.backbone = get_backbone(backbone)
+
+        # ----- CurricularFace head -----
+        self.curricular = CurricularFace(
+            feat_dim=FEATURE_DIM,
+            num_class=num_classes,
+            m=M_curricular,
+            s=S_curricular,
+            momentum=MOMENTUM_curricular
+        )
+        self.loss_model = "curricularface"   # for logging / compatibility
+        print(f"Initialize CurricularFace model with backbone {backbone}")
+
+    # ----------------------------------------------------------------
+    def forward(self, x, labels=None):
+        feats = self.backbone(x)                 # [N, FEATURE_DIM]
+
+        if self.training:
+            assert labels is not None
+            return self.curricular(feats, labels)   # → [origin*s, logits], norms, loss_g, one_hot
+        else:
+            return feats
+
+class VPLArcFace(nn.Module):
+    """
+    VPL-ArcFace: Virtual Proxy Learning for ArcFace
+    Paper: https://arxiv.org/abs/2103.10965
+
+    Fully aligned with your SphereFace / CosFace / ArcFace / ... heads.
+    """
+    def __init__(self,
+                 feat_dim: int,
+                 num_class: int,
+                 s: float = 64.0,
+                 m: float = 0.50,
+                 easy_margin: bool = True,
+                 lamda: float = 0.15,
+                 delta: int = 100,
+                 device_id=None):
+        """
+        Args:
+            feat_dim      : backbone embedding size
+            num_class     : number of identities
+            s             : logit scale
+            m             : angular margin
+            easy_margin   : use easy-margin (cos > 0 → apply margin)
+            lamda         : memory interpolation weight
+            delta         : memory lifetime (steps)
+            device_id     : (optional) list of GPUs for model-parallel
+        """
+        super().__init__()
+        self.feat_dim   = feat_dim
+        self.num_class  = num_class
+        self.s          = s
+        self.m          = m
+        self.easy_margin = easy_margin
+        self.lamda      = lamda
+        self.delta      = delta
+        self.device_id  = device_id
+
+        # ---- class prototypes: [C, D] (ArcFace style) ----
+        self.weight = nn.Parameter(torch.empty(num_class, feat_dim))
+        nn.init.xavier_uniform_(self.weight)
+
+        # ---- virtual proxy memory & life ----
+        self.register_buffer('mem', torch.zeros(num_class, feat_dim))
+        self.register_buffer('life', torch.zeros(num_class))
+
+        # ---- ArcFace constants (float32) ----
+        self.register_buffer('cos_m', torch.tensor(math.cos(m), dtype=torch.float32))
+        self.register_buffer('sin_m', torch.tensor(math.sin(m), dtype=torch.float32))
+        self.register_buffer('th', torch.tensor(math.cos(math.pi - m), dtype=torch.float32))
+        self.register_buffer('mm', torch.tensor(math.sin(math.pi - m) * m, dtype=torch.float32))
+
+        # ---- training mode flag (norm_training_flag) ----
+        self.norm_training_flag = True
+
+        print(f"VPLArcFace → s={s:.1f}, m={m:.3f}, lamda={lamda:.3f}, delta={delta}, easy={easy_margin}")
+
+    # --------------------------------------------------------------------
+    def change_training_mode(self, flag: bool):
+        """Toggle memory-based proxy learning (called from training loop)."""
+        self.norm_training_flag = flag
+
+    # --------------------------------------------------------------------
+    def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
+        """Return raw class centers. Shape: [feat_dim, batch_size]"""
+        return self.weight[:, labels].clone().detach()   # [D, N]
+
+    # --------------------------------------------------------------------
+    def forward(self, feats: torch.Tensor, labels: torch.Tensor):
+        with autocast(device_type='cuda'):
+            # ---- feature norms (for MagFace / logging) ----
+            norms = torch.norm(feats, p=2, dim=1, keepdim=True)          # [N,1]
+
+            # ---- L2-normalize input ----
+            feats_norm = F.normalize(feats, dim=1)                       # [N,D]
+
+            # ---- cosine with weight ----
+            weight_norm = F.normalize(self.weight, dim=1)                # [C,D]
+            cosine_weight = F.linear(feats_norm, weight_norm)           # [N,C]
+
+            # ---- one-hot ----
+            one_hot = torch.zeros(cosine_weight.size(), device=cosine_weight.device)
+            one_hot.scatter_(1, labels.view(-1, 1), 1.0)
+
+            if self.norm_training_flag:
+                # ---- update memory & life (only on valid labels) ----
+                valid_idx = torch.where(labels != -1)[0]
+                if valid_idx.numel() > 0:
+                    unique_labels = torch.unique(labels[valid_idx])
+                    with torch.no_grad():
+                        for cls in unique_labels:
+                            cls_mask = (labels == cls)
+                            cls_feats = feats[cls_mask]
+                            if cls_feats.size(0) > 0:
+                                self.mem[cls] = cls_feats.mean(dim=0)
+                                self.life[cls] = self.delta
+
+                    # decay all life
+                    self.life = self.life - 1
+                    active_mask = (self.life > 0).float().unsqueeze(0)   # [1,C]
+
+                    # ---- cosine with memory ----
+                    mem_norm = F.normalize(self.mem, dim=1)
+                    cosine_mem = F.linear(feats_norm, mem_norm)         # [N,C]
+
+                    # ---- interpolate: (1-λ)·weight + λ·mem (active), else + λ·1 (inactive) ----
+                    cosine1 = (1 - active_mask * self.lamda) * cosine_weight + active_mask * self.lamda * cosine_mem
+                    cosine2 = (1 - active_mask * self.lamda) * cosine_weight + active_mask * self.lamda * 1.0
+                    cosine = one_hot * cosine2 + (1.0 - one_hot) * cosine1
+                else:
+                    cosine = cosine_weight
+            else:
+                cosine = cosine_weight
+
+            # ---- clamp for stability ----
+            cosine = cosine.clamp(-1 + 1e-7, 1 - 1e-7)
+            cosine_cp = cosine.clone()
+
+            # ---- ArcFace margin: cos(θ + m) ----
+            sine = torch.sqrt(1.0 - cosine**2 + 1e-9)
+            phi = cosine * self.cos_m - sine * self.sin_m
+
+            if self.easy_margin:
+                phi = torch.where(cosine > 0, phi, cosine)
+            else:
+                phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+
+            # ---- combine: target → phi, others → cosine ----
+            output = one_hot * phi + (1.0 - one_hot) * cosine
+            output = output * self.s
+
+            pre_margin_logits = cosine_cp * self.s
+
+        return [pre_margin_logits, output], norms, 0, one_hot
+
+    # --------------------------------------------------------------------
+    def _model_parallel_cos(self, x_norm, w_norm):
+        """Rarely used – kept for API parity."""
+        sub_weights = torch.chunk(w_norm, len(self.device_id), dim=0)
+        out = []
+        for i, dev in enumerate(self.device_id):
+            xi = x_norm.to(dev)
+            wi = sub_weights[i].to(dev)
+            out.append(F.linear(xi, wi))
+        return torch.cat(out, dim=1).to(self.device_id[0])
+
+class VPLArcFaceNet(nn.Module):
+    """
+    Backbone → embedding → VPLArcFace head
+    """
+    def __init__(self, num_classes: int, backbone):
+        super().__init__()
+        self.backbone = get_backbone(backbone)
+
+        self.vpl_head = VPLArcFace(
+            feat_dim=FEATURE_DIM,
+            num_class=num_classes,
+            s=S_vpl,
+            m=M_vpl,
+            easy_margin=EASY_MARGIN_vpl,
+            lamda=LAMDA_vpl,
+            delta=DELTA_vpl
+        )
+        self.loss_model = "vpl_arcface"
+        print(f"Initialize VPLArcFace model with backbone {backbone}")
+
+    def forward(self, x, labels=None):
+        feats = self.backbone(x)
+        if self.training:
+            assert labels is not None
+            return self.vpl_head(feats, labels)
+        return feats
+
+    def change_training_mode(self, flag: bool):
+        """Call this at start/end of epoch to toggle memory updates."""
+        self.vpl_head.change_training_mode(flag)
 
 class AdaFace(nn.Module):
     """
@@ -998,4 +1174,385 @@ class ElasticArcFaceNet(nn.Module):
             assert labels is not None
             return self.head(feats, labels)
         return feats
+
+class MagFace(nn.Module):
+    """
+    MagFace: A Universal Representation for Face Recognition and Quality Assessment
+    Paper: https://arxiv.org/abs/2103.12805
+
+    Fully aligned with your SphereFace / CosFace / ArcFace / ... heads.
+    """
+    def __init__(self,
+                 feat_dim: int,
+                 num_class: int,
+                 s: float = 64.0,
+                 easy_margin: bool = True,
+                 l_margin: float = 0.45,
+                 u_margin: float = 0.8,
+                 l_a: float = 10.0,
+                 u_a: float = 110.0,
+                 device_id=None):
+        """
+        Args:
+            feat_dim     : dimension of backbone embedding
+            num_class    : number of identities
+            s            : logit scale
+            easy_margin  : apply margin only when cos > 0
+            l_margin / u_margin : lower/upper adaptive margin
+            l_a / u_a    : lower/upper norm range for adaptive margin
+            device_id    : (optional) list of GPUs for model-parallel
+        """
+        super().__init__()
+        self.feat_dim   = feat_dim
+        self.num_class  = num_class
+        self.s          = s
+        self.easy_margin = easy_margin
+        self.l_margin   = l_margin
+        self.u_margin   = u_margin
+        self.l_a        = l_a
+        self.u_a        = u_a
+        self.device_id  = device_id
+
+        # ---- class prototypes: [D, C] (CosFace style) ----
+        self.kernel = nn.Parameter(torch.empty(feat_dim, num_class))
+        self.kernel.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
+
+        print(f"MagFace → s={s:.1f}, easy_margin={easy_margin}, "
+              f"l_m={l_margin:.3f}, u_m={u_margin:.3f}, l_a={l_a}, u_a={u_a}")
+
+    # --------------------------------------------------------------------
+    def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
+        """Return raw class centers. Shape: [feat_dim, batch_size]"""
+        return self.kernel[:, labels].clone().detach()   # [D, N]
+
+    # --------------------------------------------------------------------
+    def _margin(self, x_norm: torch.Tensor) -> torch.Tensor:
+        """Adaptive margin: linear interpolation between l_margin and u_margin"""
+        margin = (self.u_margin - self.l_margin) / (self.u_a - self.l_a) * (x_norm - self.l_a) + self.l_margin
+        return margin
+
+    # --------------------------------------------------------------------
+    def calc_loss_G(self, x_norm: torch.Tensor) -> torch.Tensor:
+        """MagFace magnitude regularization loss"""
+        g = 1 / (self.u_a ** 2) * x_norm + 1 / x_norm
+        return torch.mean(g)
+
+    # --------------------------------------------------------------------
+    def forward(self, feats: torch.Tensor, labels: torch.Tensor):
+        with autocast(device_type='cuda'):
+            # ---- feature norms (used for adaptive margin & loss_G) ----
+            norms = torch.norm(feats, p=2, dim=1, keepdim=True)          # [N,1]
+            x_norm = norms.clamp(self.l_a, self.u_a)                     # [N,1]
+
+            # ---- MagFace loss_G (magnitude regularization) ----
+            loss_g = self.calc_loss_G(x_norm)
+
+            # ---- L2-normalize both sides ----
+            feats_norm = F.normalize(feats, dim=1)                       # [N,D]
+            weight_norm = F.normalize(self.kernel, dim=0)                # [D,C]
+
+            # ---- cosine similarity ----
+            if self.device_id is None:
+                cos_theta = torch.mm(feats_norm, weight_norm)            # [N,C]
+            else:
+                cos_theta = self._model_parallel_cos(feats_norm, weight_norm)
+
+            cos_theta = cos_theta.clamp(-1 + 1e-7, 1 - 1e-7)
+            cos_theta_cp = cos_theta.clone()
+
+            # ---- adaptive margin per sample ----
+            ada_margin = self._margin(x_norm)                            # [N,1]
+            cos_m = torch.cos(ada_margin)
+            sin_m = torch.sin(ada_margin)
+
+            # ---- cos(θ + m) ----
+            sin_theta = torch.sqrt(1.0 - cos_theta**2 + 1e-9)
+            cos_theta_m = cos_theta * cos_m - sin_theta * sin_m
+
+            if self.easy_margin:
+                cos_theta_m = torch.where(cos_theta > 0, cos_theta_m, cos_theta)
+            else:
+                # Full margin version
+                mm = torch.sin(math.pi - ada_margin) * ada_margin
+                threshold = torch.cos(math.pi - ada_margin)
+                cos_theta_m = torch.where(cos_theta > threshold, cos_theta_m, cos_theta - mm)
+
+            # ---- one-hot mask ----
+            one_hot = torch.zeros(cos_theta.size(), device=cos_theta.device)
+            one_hot.scatter_(1, labels.view(-1, 1), 1.0)
+
+            # ---- combine: target → cos(θ+m), others → cos(θ) ----
+            logits = one_hot * cos_theta_m + (1.0 - one_hot) * cos_theta
+            logits = logits * self.s
+
+            pre_margin_logits = cos_theta_cp * self.s
+
+        return [pre_margin_logits, logits], x_norm, loss_g, one_hot
+
+    # --------------------------------------------------------------------
+    def _model_parallel_cos(self, x_norm, w_norm):
+        """Model-parallel cosine (rarely used – API parity)."""
+        sub_weights = torch.chunk(w_norm, len(self.device_id), dim=1)
+        out = []
+        for i, dev in enumerate(self.device_id):
+            xi = x_norm.to(dev)
+            wi = sub_weights[i].to(dev)
+            out.append(torch.mm(xi, wi))
+        return torch.cat(out, dim=1).to(self.device_id[0])
+
+class MagFaceNet(nn.Module):
+    """
+    Backbone → embedding → MagFace head
+    """
+    def __init__(self, num_classes: int, backbone):
+        super().__init__()
+        self.backbone = get_backbone(backbone)
+
+        self.magface = MagFace(
+            feat_dim=FEATURE_DIM,
+            num_class=num_classes,
+            s=S_mag,
+            easy_margin=EASY_MARGIN_mag,
+            l_margin=L_MARGIN_mag,
+            u_margin=U_MARGIN_mag,
+            l_a=L_A_mag,
+            u_a=U_A_mag
+        )
+        self.loss_model = "magface"
+        print(f"Initialize MagFace model with backbone {backbone}")
+
+    def forward(self, x, labels=None):
+        feats = self.backbone(x)
+        if self.training:
+            assert labels is not None
+            return self.magface(feats, labels)
+        return feats
+
+class QAFace(nn.Module):
+    """
+    QAFace: Quality-Aware Face Recognition with Injection Memory
+    (Assumed from your code – likely a VPL-style + quality injection)
+
+    Fully aligned with your SphereFace / CosFace / ArcFace / ... heads.
+    """
+    def __init__(self,
+                 feat_dim: int,
+                 num_class: int,
+                 s: float = 64.0,
+                 m: float = 0.50,
+                 easy_margin: bool = True,
+                 delta: int = 1000,
+                 tto: float = 2.0,
+                 alpha: float = 0.99,
+                 device_id=None):
+        """
+        Args:
+            feat_dim     : backbone embedding size
+            num_class    : number of identities
+            s            : logit scale
+            m            : angular margin
+            easy_margin  : apply margin only when cos > 0
+            delta        : memory lifetime
+            tto          : threshold for injection (in std space)
+            alpha        : EMA for mean/std of magnitude
+            device_id    : (optional) list of GPUs
+        """
+        super().__init__()
+        self.feat_dim   = feat_dim
+        self.num_class  = num_class
+        self.s          = s
+        self.m          = m
+        self.easy_margin = easy_margin
+        self.delta      = delta
+        self.tto        = tto
+        self.alpha      = alpha
+        self.device_id  = device_id
+
+        # ---- class prototypes: [C, D] (ArcFace style) ----
+        self.weight = nn.Parameter(torch.empty(num_class, feat_dim))
+        nn.init.xavier_uniform_(self.weight)
+
+        # ---- memory & life ----
+        self.register_buffer('mem', torch.zeros(num_class, feat_dim))
+        self.register_buffer('life', torch.zeros(num_class))
+
+        # ---- quality stats (EMA) ----
+        self.register_buffer('muy', torch.tensor(0.0))
+        self.register_buffer('std', torch.tensor(1.0))
+
+        # ---- ArcFace constants (float32) ----
+        self.register_buffer('cos_m', torch.tensor(math.cos(m), dtype=torch.float32))
+        self.register_buffer('sin_m', torch.tensor(math.sin(m), dtype=torch.float32))
+        self.register_buffer('th', torch.tensor(math.cos(math.pi - m), dtype=torch.float32))
+        self.register_buffer('mm', torch.tensor(math.sin(math.pi - m) * m, dtype=torch.float32))
+
+        # ---- training mode flag ----
+        self.norm_training_flag = True
+
+        print(f"QAFace → s={s:.1f}, m={m:.3f}, delta={delta}, tto={tto}, alpha={alpha:.3f}")
+
+    # --------------------------------------------------------------------
+    def change_training_mode(self, flag: bool):
+        """Toggle quality-aware memory injection."""
+        self.norm_training_flag = flag
+
+    # --------------------------------------------------------------------
+    def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
+        """Return raw class centers. Shape: [feat_dim, batch_size]"""
+        return self.weight[:, labels].clone().detach()   # [D, N]
+
+    # --------------------------------------------------------------------
+    def injection_cal(self, norm_mag_minput: torch.Tensor) -> torch.Tensor:
+        """Compute injection mask: exp(-z) if |z| < tto else 0"""
+        f = torch.exp(-norm_mag_minput)
+        f = torch.where(torch.abs(norm_mag_minput) < self.tto, f, torch.zeros_like(f))
+        return f
+
+    # --------------------------------------------------------------------
+    def forward(self, feats: torch.Tensor, minput: torch.Tensor, labels: torch.Tensor):
+        """
+        Args:
+            feats   : clean backbone features [N, D]
+            minput  : magnitude-sensitive input (e.g., noisy or low-quality) [N, D]
+            labels  : [N]
+
+        Returns:
+            [pre*s, logits], norms, loss_g, one_hot
+        """
+        with autocast(device_type='cuda'):
+            # ---- feature norms (from clean feats) ----
+            norms = torch.norm(feats, p=2, dim=1, keepdim=True)          # [N,1]
+
+            # ---- L2-normalize clean feats ----
+            feats_norm = F.normalize(feats, dim=1)                       # [N,D]
+            weight_norm = F.normalize(self.weight, dim=1)                # [C,D]
+
+            # ---- base cosine (weight) ----
+            cosine_weight = F.linear(feats_norm, weight_norm)            # [N,C]
+
+            # ---- one-hot ----
+            one_hot = torch.zeros(cosine_weight.size(), device=cosine_weight.device)
+            one_hot.scatter_(1, labels.view(-1, 1), 1.0)
+
+            if self.norm_training_flag:
+                # ---- magnitude stats (EMA) from minput ----
+                mag_minput = torch.norm(minput, p=2, dim=1, keepdim=True)  # [N,1]
+                mag_mean = mag_minput.mean()
+                mag_std = mag_minput.std()
+
+                if self.muy == 0.0:  # first batch
+                    self.muy = mag_mean
+                    self.std = mag_std
+                else:
+                    self.muy = self.alpha * self.muy + (1 - self.alpha) * mag_mean
+                    self.std = self.alpha * self.std + (1 - self.alpha) * mag_std
+
+                # ---- normalize magnitude ----
+                norm_mag_minput = (mag_minput - self.muy) / (self.std + 1e-6)  # [N,1]
+                injection_mask = self.injection_cal(norm_mag_minput.squeeze(1))  # [N]
+                injection = injection_mask.unsqueeze(1) * minput / (mag_minput + 1e-6)  # [N,D]
+
+                # ---- update memory & life ----
+                valid_idx = torch.where(labels != -1)[0]
+                if valid_idx.numel() > 0:
+                    unique_labels = torch.unique(labels[valid_idx])
+                    with torch.no_grad():
+                        for cls in unique_labels:
+                            cls_mask = (labels == cls)
+                            cls_inj = injection[cls_mask]
+                            if cls_inj.size(0) > 0:
+                                self.mem[cls] = cls_inj.mean(dim=0)
+                                self.life[cls] = self.delta
+
+                    # decay life
+                    self.life = self.life - 1
+                    active_mask = (self.life > 0).float().unsqueeze(0)   # [1,C]
+
+                    # ---- cosine with memory ----
+                    mem_norm = F.normalize(self.mem, dim=1)
+                    cosine_mem = F.linear(feats_norm, mem_norm)         # [N,C]
+
+                    # ---- cosine1: memory interpolation (non-target) ----
+                    cosine1 = (1 - active_mask) * cosine_weight + active_mask * cosine_mem
+
+                    # ---- cosine2: target with injection ----
+                    target_weight = self.weight[labels] + injection          # [N,D]
+                    target_weight_norm = F.normalize(target_weight, dim=1)
+                    cosine2 = (feats_norm * target_weight_norm).sum(dim=1, keepdim=True)  # [N,1]
+                    cosine2 = cosine2.expand(-1, self.num_class)            # [N,C]
+
+                    # ---- final cosine ----
+                    cosine = one_hot * cosine2 + (1.0 - one_hot) * cosine1
+                else:
+                    cosine = cosine_weight
+            else:
+                cosine = cosine_weight
+
+            # ---- clamp ----
+            cosine = cosine.clamp(-1 + 1e-7, 1 - 1e-7)
+            cosine_cp = cosine.clone()
+
+            # ---- ArcFace margin ----
+            sine = torch.sqrt(1.0 - cosine**2 + 1e-9)
+            phi = cosine * self.cos_m - sine * self.sin_m
+
+            if self.easy_margin:
+                phi = torch.where(cosine > 0, phi, cosine)
+            else:
+                phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+
+            # ---- combine ----
+            output = one_hot * phi + (1.0 - one_hot) * cosine
+            output = output * self.s
+
+            pre_margin_logits = cosine_cp * self.s
+
+        return [pre_margin_logits, output], norms, 0, one_hot
+
+    # --------------------------------------------------------------------
+    def _model_parallel_cos(self, x_norm, w_norm):
+        sub_weights = torch.chunk(w_norm, len(self.device_id), dim=0)
+        out = []
+        for i, dev in enumerate(self.device_id):
+            xi = x_norm.to(dev)
+            wi = sub_weights[i].to(dev)
+            out.append(F.linear(xi, wi))
+        return torch.cat(out, dim=1).to(self.device_id[0])
+    
+class QAFaceNet(nn.Module):
+    """
+    Backbone → (clean + minput) → QAFace head
+    """
+    def __init__(self, num_classes: int, backbone):
+        super().__init__()
+        self.backbone = get_backbone(backbone)
+
+        self.qaface = QAFace(
+            feat_dim=FEATURE_DIM,
+            num_class=num_classes,
+            s=S_qa,
+            m=M_qa,
+            easy_margin=EASY_MARGIN_qa,
+            delta=DELTA_qa,
+            tto=TTO_qa,
+            alpha=ALPHA_qa
+        )
+        self.loss_model = "qaface"
+        print(f"Initialize QAFace model with backbone {backbone}")
+
+    def forward(self, x_clean, x_minput=None, labels=None):
+        feats_clean = self.backbone(x_clean)
+        if x_minput is None:
+            x_minput = feats_clean  # fallback
+        feats_minput = self.backbone(x_minput) if x_minput is not None else feats_clean
+
+        if self.training:
+            assert labels is not None
+            return self.qaface(feats_clean, feats_minput, labels)
+        return feats_clean
+
+    def change_training_mode(self, flag: bool):
+        self.qaface.change_training_mode(flag)
+
+
 
