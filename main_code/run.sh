@@ -14,7 +14,6 @@ shift  # Remove the first argument (the script name) from $@
 BATCH_SIZE=1024
 EPOCHS=200
 LR=0.1
-BACKBONE="resnet18"
 
 # Parse command-line arguments for overrides
 for arg in "$@"; do
@@ -35,4 +34,4 @@ done
 echo "🚀 Running: python $PYTHON_FILE --batch_size $BATCH_SIZE --epochs $EPOCHS --learning_rate $LR $@"
 
 # Run the Python script
-python "$PYTHON_FILE" --batch_size "$BATCH_SIZE" --epochs "$EPOCHS" --learning_rate "$LR" --backbone "$BACKBONE" "$@"
+python "$PYTHON_FILE" --batch_size "$BATCH_SIZE" --epochs "$EPOCHS" --learning_rate "$LR" "$@"

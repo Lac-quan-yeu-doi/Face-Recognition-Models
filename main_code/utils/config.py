@@ -8,6 +8,7 @@ WORKING_PATH = "/root/dfs/callmePhineas/DACN/working"
 DATASET_PATH = "/home/phatvo/callmePhineas/DACN/working/dataset"
 WORKING_PATH = "/home/phatvo/callmePhineas/DACN/working/result"
 
+BACKBONE = 'resnet18'
 
 FEATURE_DIM = 512
 LAMBDA_G = 0.0

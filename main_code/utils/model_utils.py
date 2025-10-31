@@ -243,7 +243,7 @@ def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch
 
 #     return 100.0 * correct / total if total > 0 else 0.0
 
-# def evaluate_lfw_10fold(model, pairs_file, batch_size, root_dir, transform, device, threshold=0.33):
+# def cross_validate_kfold(model, pairs_file, batch_size, root_dir, transform, device, threshold=0.33):
 #     model.eval()
 #     fold_accuracies = []
 #     num_folds = 10
@@ -317,8 +317,41 @@ def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch
 #     print(f"Best threshold: {best_thresh:.4f} → {best_acc:.3f}%")
 #     return best_thresh, best_acc, results
 
-
-def evaluate_verification(model, dataset, batch_size, device, threshold=0.33):
+def compute_auc(model, dataset, batch_size, device):
+    """
+    Compute AUC on the given dataset.
+    """
+    model.eval()
+    all_similarities = []
+    all_labels = []
+    
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    
+    with torch.no_grad():
+        for img1, img2, same in loader:
+            if img1 is None:
+                continue
+            img1, img2 = img1.to(device), img2.to(device)
+            
+            feat1 = F.normalize(model(img1), dim=1)
+            feat2 = F.normalize(model(img2), dim=1)
+            cos_sim = (feat1 * feat2).sum(dim=1)
+            
+            all_similarities.extend(cos_sim.cpu().numpy())
+            if isinstance(same, torch.Tensor):
+                all_labels.extend(same.cpu().numpy())
+            else:
+                all_labels.extend(same)
+    
+    all_similarities = np.array(all_similarities)
+    all_labels = np.array(all_labels)
+    
+    if len(np.unique(all_labels)) < 2:
+        return 0.0  # AUC undefined if only one class
+    
+    return roc_auc_score(all_labels, all_similarities)
+    
+def evaluate(model, dataset, batch_size, device, threshold=0.33):
     model.eval()
     correct = total = 0
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
@@ -380,17 +413,17 @@ def tune_threshold_roc(model, dataset, batch_size, device):
     
     return best_thresh, best_acc
 
-def evaluate_lfw_10fold(model, pairs_file, img_dir, transform, device, batch_size=64, k_fold=10):
+def cross_validate_kfold(model, pairs_file, img_dir, transform, device, batch_size=64, k_fold=10):
     """
-    pairs_file: path to .list file with lines '10 11 1'
-    img_dir: directory containing 0.jpg, 1.jpg, ...
+    10-fold evaluation on LFW-style .list file.
+    Returns: mean_acc, std_acc, mean_auc, std_auc
     """
-    # ---- Load pairs (line by line from .list file) ----
+    # ---- Load pairs ----
     all_pairs, labels = [], []
     with open(pairs_file, "r") as f:
         for line in f:
             line = line.strip()
-            if not line:  # Skip empty lines
+            if not line:
                 continue
             parts = line.split()
             if len(parts) < 3:
@@ -404,36 +437,48 @@ def evaluate_lfw_10fold(model, pairs_file, img_dir, transform, device, batch_siz
 
     skf = StratifiedKFold(n_splits=k_fold, shuffle=True, random_state=42)
     fold_accuracies = []
+    fold_aucs = []
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(all_pairs, labels), 1):
         val_pairs = all_pairs[val_idx]
         train_pairs = all_pairs[train_idx]
 
-        # Create datasets
         val_dataset = FlatPairDataset(val_pairs, img_dir, transform)
         train_dataset = FlatPairDataset(train_pairs, img_dir, transform)
 
         print(f"\n=== Fold {fold}/{k_fold} ===")
-        print("Tuning threshold using ROC curve...")
+        
+        # Tune threshold on validation fold
         best_thresh, _ = tune_threshold_roc(model, val_dataset, batch_size, device)
-        print(f"Best threshold for this fold: {best_thresh:.4f}")
+        print(f"Best threshold: {best_thresh:.4f}")
 
-        acc = evaluate_verification(model, train_dataset, batch_size, device, best_thresh)
+        # Evaluate accuracy on train (test proxy) using tuned threshold
+        acc = evaluate(model, train_dataset, batch_size, device, best_thresh)
         fold_accuracies.append(acc)
-        print(f"Test accuracy (k-1 folds): {acc:.3f}%")
+        print(f"Accuracy (on k-1 folds): {acc:.3f}%")
+
+        # Compute AUC on test set (train folds)
+        auc = compute_auc(model, train_dataset, batch_size, device)
+        fold_aucs.append(auc)
+        print(f"AUC (on k-1 folds): {auc:.4f}")
 
     mean_acc = np.mean(fold_accuracies)
     std_acc = np.std(fold_accuracies)
-    print(f"\n{k_fold}-fold: {mean_acc:.3f}% ± {std_acc:.3f}%")
-    return mean_acc, std_acc
+    mean_auc = np.mean(fold_aucs)
+    std_auc = np.std(fold_aucs)
 
+    print(f"\n{k_fold}-fold Results:")
+    print(f"Accuracy: {mean_acc:.3f}% ± {std_acc:.3f}%")
+    print(f"AUC:      {mean_auc:.4f} ± {std_auc:.4f}")
+
+    return mean_acc, std_acc, mean_auc, std_auc
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch_size', '-bs', type=int, default=512)
     parser.add_argument('--epochs', '-e', type=int, default=30)
     parser.add_argument('--learning_rate', '-lr', type=float, default=0.1)
-    parser.add_argument('--backbone', '-bb', type=str, default='resnet18')
+    # parser.add_argument('--backbone', '-bb', type=str, default='resnet18')
     parser.add_argument('--lambda_g', type=float, default=0.0, help="Magnitude loss weight")
     parser.add_argument('--print_freq', type=int, default=100)
     parser.add_argument(
@@ -507,7 +552,7 @@ def main_pipeline(
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, collate_fn=custom_collate_fn)
 
     # === Model, Opt, Scheduler ===
-    model = model_class(num_classes=num_classes, backbone=args.backbone).to(device)
+    model = model_class(num_classes=num_classes, backbone=BACKBONE).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
     scheduler = get_scheduler(optimizer, "customstep")
@@ -536,29 +581,6 @@ def main_pipeline(
     torch.save(model.state_dict(), f"{model_checkpoints_path}/{model_final_filename}")
     wandb.save(f"{model_checkpoints_path}/*")
     print("### Models uploaded ###")
-
-    # # === Evaluation ===
-    # # Load best model
-    # best_path = f"{model_checkpoints_path}/{model_name}_min_loss.pth"
-    # if os.path.exists(best_path):
-    #     checkpoint = torch.load(best_path, map_location=device)
-    #     model.load_state_dict(checkpoint['model_state_dict'])
-
-    # pairs_file = f'{dataset_path}/face_evaluation_data/lfw/pair.list'
-    # img_dir = f'{dataset_path}/face_evaluation_data/lfw/imgs'
-
-    # # Run 10-fold cross-validation with ROC-based threshold tuning
-    # mean_acc, std_acc = evaluate_lfw_10fold(
-    #     model=model,
-    #     pairs_file=pairs_file,
-    #     img_dir=img_dir,
-    #     transform=test_transform,
-    #     device=device,
-    #     batch_size=512,
-    #     k_fold=10
-    # )
-
-    # print(f"\nFinal LFW 10-Fold Result: {mean_acc:.2f}% ± {std_acc:.2f}%")
 
     wandb.finish()
 

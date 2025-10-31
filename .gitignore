@@ -44,6 +44,7 @@ main_code/validation_log*
 # backup
 sphere-cos-arc before wandb/
 main_code/models_evaluation/
+main_code/evaluation_results/
 data_a_P/
 
 # ignore sh file
