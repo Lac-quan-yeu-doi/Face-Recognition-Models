@@ -39,7 +39,7 @@ MARGIN_TYPE_mv = 'am' # 'arc' for MV-Arc; 'am' for MV-Cos
 S_ada        = 64.0
 M_ada        = 0.4
 H_ada        = 0.333
-T_ALPHA_ada  = 1.0
+T_ALPHA_ada  = 0.99
 
 # ElasticArcFace
 S_elastic_arc   = 64.0
