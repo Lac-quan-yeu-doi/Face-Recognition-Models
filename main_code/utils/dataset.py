@@ -1,6 +1,7 @@
 import os
 import csv
 import random
+import torch
 from PIL import Image
 from torch.utils.data import Dataset
 from alive_progress import alive_bar
