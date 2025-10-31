@@ -537,34 +537,34 @@ def main_pipeline(
     wandb.save(f"{model_checkpoints_path}/*")
     print("### Models uploaded ###")
 
-    # === Evaluation ===
-    # Load best model
-    best_path = f"{model_checkpoints_path}/{model_name}_min_loss.pth"
-    if os.path.exists(best_path):
-        checkpoint = torch.load(best_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+    # # === Evaluation ===
+    # # Load best model
+    # best_path = f"{model_checkpoints_path}/{model_name}_min_loss.pth"
+    # if os.path.exists(best_path):
+    #     checkpoint = torch.load(best_path, map_location=device)
+    #     model.load_state_dict(checkpoint['model_state_dict'])
 
-    pairs_file = f'{dataset_path}/face_evaluation_data/lfw/pair.list'
-    img_dir = f'{dataset_path}/face_evaluation_data/lfw/imgs'
+    # pairs_file = f'{dataset_path}/face_evaluation_data/lfw/pair.list'
+    # img_dir = f'{dataset_path}/face_evaluation_data/lfw/imgs'
 
-    # Run 10-fold cross-validation with ROC-based threshold tuning
-    mean_acc, std_acc = evaluate_lfw_10fold(
-        model=model,
-        pairs_file=pairs_file,
-        img_dir=img_dir,
-        transform=test_transform,
-        device=device,
-        batch_size=512,
-        k_fold=10
-    )
+    # # Run 10-fold cross-validation with ROC-based threshold tuning
+    # mean_acc, std_acc = evaluate_lfw_10fold(
+    #     model=model,
+    #     pairs_file=pairs_file,
+    #     img_dir=img_dir,
+    #     transform=test_transform,
+    #     device=device,
+    #     batch_size=512,
+    #     k_fold=10
+    # )
 
-    print(f"\nFinal LFW 10-Fold Result: {mean_acc:.2f}% ± {std_acc:.2f}%")
+    # print(f"\nFinal LFW 10-Fold Result: {mean_acc:.2f}% ± {std_acc:.2f}%")
 
     wandb.finish()
 
     end_time = time.time()
     print(f"Code runs in {end_time - start_time}s")
 
-    return model, mean_acc
+    # return model, mean_acc
 
 
