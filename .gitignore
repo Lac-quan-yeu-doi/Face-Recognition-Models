@@ -51,3 +51,4 @@ data_a_P/
 pull_server.sh
 push_server.sh
 main_code/push_server.sh
+main_code/run_models.sh

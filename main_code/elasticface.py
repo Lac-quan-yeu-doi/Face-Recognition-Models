@@ -14,7 +14,7 @@ if __name__ == '__main__':
     log_folder = f'{WORKING_PATH}/log'
     os.makedirs(log_folder, exist_ok=True)
 
-    base_type = 'arc' # 'arc' / 'cos
+    base_type = 'cos' # 'arc' / 'cos
 
     if base_type == 'arc':
         log_file_path = os.path.join(log_folder, 'elastic_arcface.txt')
