@@ -11,7 +11,7 @@ import argparse
 from pathlib import Path
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import roc_curve
+from sklearn.metrics import roc_curve, roc_auc_score
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -143,7 +143,6 @@ def custom_collate_fn(batch):
         return None
     return torch.utils.data.dataloader.default_collate(batch)
 
-
 def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch, epochs, args):
     model.train()
     batch_time = AverageMeter('Time', ':6.3f')
@@ -214,108 +213,6 @@ def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch
         iters += 1
 
     return losses.avg
-
-# def evaluate_lfw_verification(model, pairs_dataset, batch_size, device, threshold=0.33):
-#     model.eval()
-#     correct = total = 0
-#     with torch.no_grad():
-#         loader = DataLoader(
-#             pairs_dataset,
-#             batch_size=batch_size,
-#             shuffle=False,
-#             num_workers=8,
-#             collate_fn=custom_collate_fn,
-#             pin_memory=True
-#         )
-#         for img1, img2, same in loader:
-#             if img1 is None:
-#                 continue
-#             img1, img2, same = img1.to(device), img2.to(device), same.to(device)
-
-#             # === CRITICAL: L2-normalize ===
-#             feat1 = F.normalize(model(img1), dim=1)
-#             feat2 = F.normalize(model(img2), dim=1)
-#             cos_sim = (feat1 * feat2).sum(dim=1)
-
-#             pred = (cos_sim > threshold).long()
-#             correct += (pred == same).sum().item()
-#             total += same.size(0)
-
-#     return 100.0 * correct / total if total > 0 else 0.0
-
-# def cross_validate_kfold(model, pairs_file, batch_size, root_dir, transform, device, threshold=0.33):
-#     model.eval()
-#     fold_accuracies = []
-#     num_folds = 10
-
-#     # Load pairs
-#     all_pairs = []
-#     with open(pairs_file, 'r') as f:
-#         reader = csv.reader(f)
-#         next(reader, None)
-#         for row in reader:
-#             if len(row) == 4 and (row[-1] in ['', ' ']):
-#                 row = row[:-1]
-#             if len(row) == 3:
-#                 name, img1, img2 = row
-#                 p1 = f"{name}/{name}_{img1.zfill(4)}.jpg"
-#                 p2 = f"{name}/{name}_{img2.zfill(4)}.jpg"
-#                 all_pairs.append((p1, p2, 1))
-#             elif len(row) == 4:
-#                 n1, i1, n2, i2 = row
-#                 p1 = f"{n1}/{n1}_{i1.zfill(4)}.jpg"
-#                 p2 = f"{n2}/{n2}_{i2.zfill(4)}.jpg"
-#                 all_pairs.append((p1, p2, 0))
-
-#     matched = [p for p in all_pairs if p[2] == 1]
-#     mismatched = [p for p in all_pairs if p[2] == 0]
-
-#     n_per_fold = min(len(matched), len(mismatched)) // num_folds
-#     if n_per_fold == 0:
-#         raise ValueError("Not enough pairs")
-
-#     np.random.seed(42)
-#     np.random.shuffle(matched)
-#     np.random.shuffle(mismatched)
-
-#     for fold in range(num_folds):
-#         start = fold * n_per_fold
-#         end = (fold + 1) * n_per_fold
-#         fold_pairs = matched[start:end] + mismatched[start:end]
-#         if not fold_pairs:
-#             continue
-
-#         dataset = LFWPairDataset(root_dir=root_dir, pairs_files=None, transform=transform)
-#         dataset.pairs = fold_pairs
-
-#         acc = evaluate_lfw_verification(model, dataset, batch_size, device, threshold)
-#         fold_accuracies.append(acc)
-#         print(f"  Fold {fold+1}: {acc:.3f}%")
-
-#     mean_acc = np.mean(fold_accuracies)
-#     std_acc = np.std(fold_accuracies)
-#     print(f"10-fold: {mean_acc:.3f}% ± {std_acc:.3f}%")
-#     return mean_acc, std_acc
-
-# def tune_threshold(model, pairs_dataset, batch_size, device, thresholds=np.arange(0.1, 0.6, 0.005)):
-#     """
-#     Tune threshold on a SINGLE validation set (e.g., DevTrain + DevTest).
-#     """
-#     print("Tuning threshold on validation set...")
-#     best_thresh = 0.33
-#     best_acc = 0.0
-#     results = []
-
-#     for thresh in thresholds:
-#         acc = evaluate_lfw_verification(model, pairs_dataset, batch_size, device, thresh)
-#         results.append((thresh, acc))
-#         print(f"  Threshold {thresh:.3f} → {acc:.3f}%")
-#         if acc > best_acc:
-#             best_acc = acc
-#             best_thresh = thresh
-
-#     print(f"Best threshold: {best_thresh:.4f} → {best_acc:.3f}%")
-#     return best_thresh, best_acc, results
 
 def compute_auc(model, dataset, batch_size, device):
     """
@@ -578,7 +475,16 @@ def main_pipeline(
         scheduler.step()
 
     # Save final
-    torch.save(model.state_dict(), f"{model_checkpoints_path}/{model_final_filename}")
+    torch.save(
+        {
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'scaler_state_dict': scaler.state_dict(),
+        },
+        f"{model_checkpoints_path}/{model_final_filename}"
+    )
+
     wandb.save(f"{model_checkpoints_path}/*")
     print("### Models uploaded ###")
 

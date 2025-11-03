@@ -247,6 +247,7 @@ class ArcFace(nn.Module):
         self.sin_m = math.sin(m)
         self.th = math.cos(math.pi - m)
         self.mm = math.sin(math.pi - m) * m
+        print(f"init ArcFace → s={self.s:.2f}, m={self.m:.3f}, easy_margin={self.easy_margin}")
 
     # --------------------------------------------------------------
     def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
@@ -277,9 +278,9 @@ class ArcFace(nn.Module):
                     weight = sub_weights[i].cuda(self.device_id[i])
                     cosine = torch.cat((cosine, F.linear(F.normalize(temp_x), F.normalize(weight)).cuda(self.device_id[0])), dim=1)
 
-            cosine_cp = cosine.clone()
+            cosine_cp = cosine.clone() # consine = cos(theta)
             sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(1e-9, 1.0))
-            phi = cosine * self.cos_m - sine * self.sin_m
+            phi = cosine * self.cos_m - sine * self.sin_m # phi = cos(theta + m)
 
             if self.easy_margin:
                 phi = torch.where(cosine > 0, phi, cosine)
@@ -310,7 +311,7 @@ class ArcFaceNet(nn.Module):
             num_classes=num_classes,
             s=S_arc,
             m=M_arc,
-            easy_margin=False
+            easy_margin=True
         )
         self.loss_model = "arcface"  # For compatibility with do_train
         print(f"Initialize ArcFace model with backbone {backbone}")

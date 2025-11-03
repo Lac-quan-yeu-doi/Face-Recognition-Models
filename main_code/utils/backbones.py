@@ -6,6 +6,7 @@ from torchvision.models import (
 )
 import torch.nn as nn
 
+from model.iresnet import iresnet18, iresnet34, iresnet50, iresnet100
 from .config import FEATURE_DIM
 
 def get_backbone(backbone_name='resnet18'):
@@ -24,6 +25,16 @@ def get_backbone(backbone_name='resnet18'):
     elif backbone_name == 'mobilenet_v2':
         backbone = mobilenet_v2(weights=MobileNet_V2_Weights.DEFAULT)
         backbone.classifier[1] = nn.Linear(backbone.classifier[1].in_features, FEATURE_DIM)
+
+    elif backbone_name.startswith('iresnet'):
+        if backbone_name == 'iresnet18':
+            backbone = iresnet18(FEATURE_DIM)
+        elif backbone_name == 'iresnet34':
+            backbone = iresnet34(FEATURE_DIM)
+        elif backbone_name == 'iresnet50':
+            backbone = iresnet50(FEATURE_DIM)
+        elif backbone_name == 'iresnet100':
+            backbone = iresnet100(FEATURE_DIM)
 
     else:
         raise ValueError(f"Unsupported backbone: {backbone_name}")

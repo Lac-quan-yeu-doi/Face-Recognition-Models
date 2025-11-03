@@ -7,6 +7,7 @@ from utils.model_utils import cross_validate_kfold
 from utils.config import DATASET_PATH
 
 test_names = ['agedb_30', 'cfp_fp', 'lfw', 'calfw', 'cplfw']
+# test_names = ['lfw']
 
 model_names = {
     'SphereFace': SphereFaceNet,
@@ -41,6 +42,7 @@ test_transform = transforms.Compose([
 
 for model_name, ModelClass in model_names.items():
     ckpt_path = f"{model_folder}/{model_name}_min_loss.pth"
+    # ckpt_path = f"{model_folder}/{model_name.lower()}_final.pth"
     if not os.path.exists(ckpt_path):
         print(f"[Warning] {ckpt_path} not found → skipping model")
         continue
@@ -60,8 +62,10 @@ for model_name, ModelClass in model_names.items():
     # Load checkpoint
     checkpoint = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
+    # model.load_state_dict(checkpoint)
     model = model.to(device)
     model.eval()
+    print(f"Loaded checkpoint {ckpt_path}")
 
     acc_row = {"model": model_name}
     auc_row = {"model": model_name}
@@ -108,12 +112,6 @@ df_auc.set_index("model", inplace=True)
 df_acc.to_csv(os.path.join(output_dir, "accuracy_10fold.csv"))
 df_auc.to_csv(os.path.join(output_dir, "auc_10fold.csv"))
 
-# Optional: one Excel file with two sheets
-excel_path = os.path.join(output_dir, "evaluation_10fold.xlsx")
-with pd.ExcelWriter(excel_path) as writer:
-    df_acc.to_excel(writer, sheet_name="Accuracy")
-    df_auc.to_excel(writer, sheet_name="AUC")
-
 print("\n" + "="*60)
 print("ACCURACY".center(60))
 print("="*60)
@@ -123,3 +121,4 @@ print("AUC".center(60))
 print("="*60)
 print(df_auc)
 print("\nResults saved to:", output_dir)
+

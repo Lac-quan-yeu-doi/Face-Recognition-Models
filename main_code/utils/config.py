@@ -8,7 +8,7 @@ WORKING_PATH = "/root/dfs/callmePhineas/DACN/working"
 DATASET_PATH = "/home/phatvo/callmePhineas/DACN/working/dataset"
 WORKING_PATH = "/home/phatvo/callmePhineas/DACN/working/result"
 
-BACKBONE = 'resnet18'
+BACKBONE = 'iresnet18'
 
 FEATURE_DIM = 512
 LAMBDA_G = 0.0
@@ -29,7 +29,7 @@ S_arc = 64.0
 M_mv        = 0.35
 WEIGHT_mv   = 1.12
 S_mv        = 32.0
-MARGIN_TYPE_mv = 'am' # 'arc' for MV-Arc; 'am' for MV-Cos
+MARGIN_TYPE_mv = 'arc' # 'arc' for MV-Arc; 'am' for MV-Cos
 
 # CurricularFace
 M_curricular = 0.5
