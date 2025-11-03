@@ -29,7 +29,7 @@ S_arc = 64.0
 M_mv        = 0.35
 WEIGHT_mv   = 1.12
 S_mv        = 32.0
-MARGIN_TYPE_mv = 'arc' # 'arc' for MV-Arc; 'am' for MV-Cos
+MARGIN_TYPE_mv = 'am' # 'arc' for MV-Arc; 'am' for MV-Cos
 
 # CurricularFace
 M_curricular = 0.5
@@ -39,7 +39,7 @@ MOMENTUM_curricular = 0.01
 # VPL-ArcFace
 S_vpl           = 64.0
 M_vpl           = 0.50
-EASY_MARGIN_vpl = False
+EASY_MARGIN_vpl = True
 LAMDA_vpl       = 0.15
 DELTA_vpl       = 100
 
@@ -63,7 +63,7 @@ PLUS_elastic_cos = False
 
 # MagFace
 S_mag           = 64.0
-EASY_MARGIN_mag = False
+EASY_MARGIN_mag = True
 L_MARGIN_mag    = 0.45
 U_MARGIN_mag    = 0.8
 L_A_mag         = 10.0
@@ -72,7 +72,7 @@ U_A_mag         = 110.0
 # QAFace
 S_qa            = 64.0
 M_qa            = 0.50
-EASY_MARGIN_qa  = False
+EASY_MARGIN_qa  = True
 DELTA_qa        = 1000
 TTO_qa          = 2.0
 ALPHA_qa        = 0.99
