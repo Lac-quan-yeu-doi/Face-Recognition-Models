@@ -211,7 +211,7 @@ def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch
             "lr": optimizer.param_groups[0]['lr'],
             "epoch": epoch,
             "step": iters
-        }, step=iters)
+        }, step=epoch)
 
         iters += 1
 
