@@ -5,3 +5,7 @@ Pillow
 python-dotenv
 wandb
 scikit-learn
+torchsummary
+psutil
+gputil
+requests

@@ -30,7 +30,8 @@ output_dir   = "evaluation_results"
 os.makedirs(output_dir, exist_ok=True)
 
 num_classes = 10575
-backbone_name = "resnet18"
+backbone_name = "iresnet18"
+batch_size = 256
 
 acc_records = []
 auc_records = []
@@ -87,15 +88,15 @@ for model_name, ModelClass in model_names.items():
             img_dir=img_dir,
             transform=test_transform,
             device=device,
-            batch_size=512,
+            batch_size=batch_size,
             k_fold=10
         )
 
         # Store *mean* values (you can also keep the std if you want)
-        acc_row[test] = f"{mean_acc:.2f}"
+        acc_row[test] = f"{mean_acc:.4f}"
         auc_row[test] = f"{mean_auc:.4f}"
 
-        print(f"  Acc : {mean_acc:.2f}% ± {std_acc:.2f}%")
+        print(f"  Acc : {mean_acc:.4f}% ± {std_acc:.4f}%")
         print(f"  AUC : {mean_auc:.4f} ± {std_auc:.4f}")
 
     acc_records.append(acc_row)

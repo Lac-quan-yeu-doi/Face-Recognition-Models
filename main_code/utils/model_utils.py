@@ -30,6 +30,9 @@ except ImportError:
 from tqdm import tqdm
 import wandb
 from dotenv import load_dotenv
+import socket
+import subprocess
+import requests
 
 from utils.config import *
 from utils.dataset import CASIAwebfaceDataset, LFWPairDataset, FlatPairDataset
@@ -402,6 +405,28 @@ def parse_args():
     )
     return parser.parse_args()
 
+def notify_pushover(model_name):
+    def get_device_name():
+        return socket.gethostname()
+
+    def get_gpu_name():
+        try:
+            return subprocess.check_output(
+                "nvidia-smi --query-gpu=name --format=csv,noheader", 
+                shell=True, text=True
+            ).strip().split('\n')[0]
+        except:
+            return "No GPU detected"
+
+    
+    user_key = os.getenv('PUSHOVER_API_USER_KEY')
+    app_token = os.getenv('PUSHOVER_API_TOKEN')
+    url = "https://api.pushover.net/1/messages.json"
+    message = f"{model_name} - {get_device_name()} - {get_gpu_name()} - finished 🚀"
+    data = {"token": app_token, "user": user_key, "message": message}
+    requests.post(url, data=data)
+    print("### Notification is sent ###")
+
 def main_pipeline(
     model_class,
     model_name,
@@ -417,6 +442,7 @@ def main_pipeline(
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # === W&B ===
+    wandb.login(key=os.getenv("WANDB_API_KEY"))
     wandb.init(
         project=project_name,
         name=model_name,
@@ -449,7 +475,7 @@ def main_pipeline(
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, collate_fn=custom_collate_fn)
 
     # === Model, Opt, Scheduler ===
-    model = model_class(num_classes=num_classes, backbone=BACKBONE).to(device)
+    model = model_class(num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
     scheduler = get_scheduler(optimizer, "customstep")
@@ -488,11 +514,12 @@ def main_pipeline(
     wandb.save(f"{model_checkpoints_path}/*")
     print("### Models uploaded ###")
 
-    wandb.finish()
-
     end_time = time.time()
     print(f"Code runs in {end_time - start_time}s")
 
+    notify_pushover(model_name)
+
+    wandb.finish()
     # return model, mean_acc
 
 

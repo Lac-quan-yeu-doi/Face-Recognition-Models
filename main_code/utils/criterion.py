@@ -110,7 +110,7 @@ class SphereFaceNet(nn.Module):
     """
     Backbone → embedding → SphereFace head
     """
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         # ----- backbone (feel free to swap) -----
         self.backbone = get_backbone(backbone)
@@ -200,7 +200,7 @@ class CosFaceNet(nn.Module):
     """
     Backbone → embedding → CosFace head
     """
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         # ----- backbone (feel free to swap) -----
         self.backbone = get_backbone(backbone)
@@ -302,7 +302,7 @@ class ArcFace(nn.Module):
         return [cosine_cp * self.s, output], norms, loss_g, one_hot
 
 class ArcFaceNet(nn.Module):
-    def __init__(self, num_classes, backbone):
+    def __init__(self, num_classes, backbone=BACKBONE):
         super(ArcFaceNet, self).__init__()
         self.backbone = get_backbone(backbone)
 
@@ -465,7 +465,7 @@ class MV_SoftmaxNet(nn.Module):
     """
     Backbone → embedding → MV_Softmax head
     """
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         self.backbone = get_backbone(backbone)
 
@@ -591,7 +591,7 @@ class CurricularFaceNet(nn.Module):
     """
     Backbone → embedding → CurricularFace head
     """
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         # ----- backbone (feel free to swap) -----
         self.backbone = get_backbone(backbone)
@@ -766,7 +766,7 @@ class VPLArcFaceNet(nn.Module):
     """
     Backbone → embedding → VPLArcFace head
     """
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         self.backbone = get_backbone(backbone)
 
@@ -922,7 +922,7 @@ class AdaFaceNet(nn.Module):
     """
     Backbone → embedding → AdaFace head
     """
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         # ----- backbone -----
         self.backbone = get_backbone(backbone)
@@ -1031,7 +1031,7 @@ class ElasticCosFace(nn.Module):
         return torch.cat(out, dim=1).to(self.device_id[0])
 
 class ElasticCosFaceNet(nn.Module):
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         self.backbone = get_backbone(backbone)
         self.head = ElasticCosFace(
@@ -1155,7 +1155,7 @@ class ElasticArcFace(nn.Module):
         return torch.cat(out, dim=1).to(self.device_id[0])
 
 class ElasticArcFaceNet(nn.Module):
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         self.backbone = get_backbone(backbone)
         self.head = ElasticArcFace(
@@ -1305,7 +1305,7 @@ class MagFaceNet(nn.Module):
     """
     Backbone → embedding → MagFace head
     """
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         self.backbone = get_backbone(backbone)
 
@@ -1524,7 +1524,7 @@ class QAFaceNet(nn.Module):
     """
     Backbone → (clean + minput) → QAFace head
     """
-    def __init__(self, num_classes: int, backbone):
+    def __init__(self, num_classes: int, backbone=BACKBONE):
         super().__init__()
         self.backbone = get_backbone(backbone)
 
