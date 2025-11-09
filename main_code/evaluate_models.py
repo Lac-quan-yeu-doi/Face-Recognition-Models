@@ -1,4 +1,5 @@
 import os
+import shutil
 import pandas as pd
 import torch
 import torchvision.transforms as transforms
@@ -27,11 +28,14 @@ model_names = {
 device       = 'cuda' if torch.cuda.is_available() else 'cpu'
 model_folder = "models_evaluation"
 output_dir   = "evaluation_results"
+if os.path.exists(output_dir):
+    shutil.rmtree(output_dir)
+    print("### Remove old results ###")
 os.makedirs(output_dir, exist_ok=True)
 
 num_classes = 10575
-backbone_name = "iresnet18"
-batch_size = 256
+backbone_name = "resnet50"
+batch_size = 128
 
 acc_records = []
 auc_records = []

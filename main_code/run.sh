@@ -11,7 +11,7 @@ PYTHON_FILE=$1
 shift  # Remove the first argument (the script name) from $@
 
 # Default values  
-BATCH_SIZE=512
+BATCH_SIZE=64
 EPOCHS=40
 LR=0.1
 
