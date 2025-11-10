@@ -1182,6 +1182,7 @@ class MagFace(nn.Module):
     Paper: https://arxiv.org/abs/2103.12805
 
     Fully aligned with your SphereFace / CosFace / ArcFace / ... heads.
+    
     """
     def __init__(self,
                  feat_dim: int,
@@ -1247,6 +1248,7 @@ class MagFace(nn.Module):
 
             # ---- MagFace loss_G (magnitude regularization) ----
             loss_g = self.calc_loss_G(x_norm)
+            # print(loss_g)
 
             # ---- L2-normalize both sides ----
             feats_norm = F.normalize(feats, dim=1)                       # [N,D]

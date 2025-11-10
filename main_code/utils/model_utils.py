@@ -180,7 +180,6 @@ def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch
             cosine_s, logits = output
             loss_id = criterion(logits, target)
             loss = loss_id + args.lambda_g * loss_g
-
         acc1, acc5 = accuracy(cosine_s, target, topk=(1, 5))
 
         optimizer.zero_grad()
@@ -457,7 +456,7 @@ def main_pipeline(
         print("Training from scratch, reset all checkpoints...")
     os.makedirs(model_checkpoints_path, exist_ok=True)
 
-    print(f"Training using {device} - batch size {args.batch_size} - epochs {args.epochs} - learning rate {args.learning_rate}")
+    print(f"Training using {device} - batch size {args.batch_size} - epochs {args.epochs} - learning rate {args.learning_rate} - lambda_g {args.lambda_g}")
     # === Data ===
     train_transform = transforms.Compose([
         # transforms.RandomHorizontalFlip(),

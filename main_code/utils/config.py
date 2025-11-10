@@ -64,7 +64,7 @@ PLUS_elastic_cos = False
 # MagFace
 S_mag           = 64.0
 EASY_MARGIN_mag = True
-L_MARGIN_mag    = 0.45
+L_MARGIN_mag    = 0.40
 U_MARGIN_mag    = 0.8
 L_A_mag         = 10.0
 U_A_mag         = 110.0

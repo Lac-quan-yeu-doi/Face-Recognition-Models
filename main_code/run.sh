@@ -14,6 +14,7 @@ shift  # Remove the first argument (the script name) from $@
 BATCH_SIZE=64
 EPOCHS=40
 LR=0.1
+LAMBDA_G=35
 
 # Parse command-line arguments for overrides
 for arg in "$@"; do
@@ -31,7 +32,7 @@ for arg in "$@"; do
 done
 
 # Print what will actually be run
-echo "🚀 Running: python $PYTHON_FILE --batch_size $BATCH_SIZE --epochs $EPOCHS --learning_rate $LR $@"
+echo "🚀 Running: python $PYTHON_FILE --batch_size $BATCH_SIZE --epochs $EPOCHS --learning_rate $LR --lambda_g $LAMBDA_G $@"
 
 # Run the Python script
-python "$PYTHON_FILE" --batch_size "$BATCH_SIZE" --epochs "$EPOCHS" --learning_rate "$LR" "$@"
+python "$PYTHON_FILE" --batch_size "$BATCH_SIZE" --epochs "$EPOCHS" --learning_rate "$LR" --lambda_g "$LAMBDA_G" "$@"
