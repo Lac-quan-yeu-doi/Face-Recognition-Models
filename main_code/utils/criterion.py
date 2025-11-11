@@ -669,7 +669,7 @@ class VPLArcFace(nn.Module):
         self.register_buffer('mm', torch.tensor(math.sin(math.pi - m) * m, dtype=torch.float32))
 
         # ---- training mode flag (norm_training_flag) ----
-        self.norm_training_flag = True
+        self.norm_training_flag = False
 
         print(f"VPLArcFace → s={s:.1f}, m={m:.3f}, lamda={lamda:.3f}, delta={delta}, easy={easy_margin}")
 
@@ -1334,9 +1334,9 @@ class MagFaceNet(nn.Module):
 class QAFace(nn.Module):
     """
     QAFace: Quality-Aware Face Recognition with Injection Memory
-    (Assumed from your code – likely a VPL-style + quality injection)
-
-    Fully aligned with your SphereFace / CosFace / ArcFace / ... heads.
+    Uses momentum backbone to generate quality-aware features.
+    
+    Fully aligned with your SphereFace / CosFace / ArcFace / MagFace heads.
     """
     def __init__(self,
                  feat_dim: int,
@@ -1355,9 +1355,9 @@ class QAFace(nn.Module):
             s            : logit scale
             m            : angular margin
             easy_margin  : apply margin only when cos > 0
-            delta        : memory lifetime
+            delta        : memory lifetime (steps)
             tto          : threshold for injection (in std space)
-            alpha        : EMA for mean/std of magnitude
+            alpha        : EMA coefficient for mean/std of magnitude
             device_id    : (optional) list of GPUs
         """
         super().__init__()
@@ -1375,22 +1375,23 @@ class QAFace(nn.Module):
         self.weight = nn.Parameter(torch.empty(num_class, feat_dim))
         nn.init.xavier_uniform_(self.weight)
 
-        # ---- memory & life ----
+        # ---- memory & life (buffers so they're saved in state_dict) ----
         self.register_buffer('mem', torch.zeros(num_class, feat_dim))
         self.register_buffer('life', torch.zeros(num_class))
 
         # ---- quality stats (EMA) ----
         self.register_buffer('muy', torch.tensor(0.0))
         self.register_buffer('std', torch.tensor(1.0))
+        self.register_buffer('_init_flag', torch.tensor(0))  # track initialization
 
-        # ---- ArcFace constants (float32) ----
+        # ---- ArcFace constants ----
         self.register_buffer('cos_m', torch.tensor(math.cos(m), dtype=torch.float32))
         self.register_buffer('sin_m', torch.tensor(math.sin(m), dtype=torch.float32))
         self.register_buffer('th', torch.tensor(math.cos(math.pi - m), dtype=torch.float32))
         self.register_buffer('mm', torch.tensor(math.sin(math.pi - m) * m, dtype=torch.float32))
 
         # ---- training mode flag ----
-        self.norm_training_flag = True
+        self.norm_training_flag = False
 
         print(f"QAFace → s={s:.1f}, m={m:.3f}, delta={delta}, tto={tto}, alpha={alpha:.3f}")
 
@@ -1398,17 +1399,26 @@ class QAFace(nn.Module):
     def change_training_mode(self, flag: bool):
         """Toggle quality-aware memory injection."""
         self.norm_training_flag = flag
+        print(f"QAFace training mode: {'NORM (quality-aware)' if flag else 'WARMING (standard ArcFace)'}")
 
     # --------------------------------------------------------------------
     def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
         """Return raw class centers. Shape: [feat_dim, batch_size]"""
-        return self.weight[:, labels].clone().detach()   # [D, N]
+        return self.weight[labels].T.clone().detach()   # [D, N]
 
     # --------------------------------------------------------------------
     def injection_cal(self, norm_mag_minput: torch.Tensor) -> torch.Tensor:
-        """Compute injection mask: exp(-z) if |z| < tto else 0"""
+        """
+        Compute injection weight: exp(-z) if |z| < tto else 0
+        
+        Args:
+            norm_mag_minput: normalized magnitude [N, 1]
+        Returns:
+            injection weights [N, 1]
+        """
         f = torch.exp(-norm_mag_minput)
-        f = torch.where(torch.abs(norm_mag_minput) < self.tto, f, torch.zeros_like(f))
+        # Only inject when normalized magnitude is within threshold
+        f = torch.where(norm_mag_minput > -self.tto, f, torch.zeros_like(f))
         return f
 
     # --------------------------------------------------------------------
@@ -1416,86 +1426,93 @@ class QAFace(nn.Module):
         """
         Args:
             feats   : clean backbone features [N, D]
-            minput  : magnitude-sensitive input (e.g., noisy or low-quality) [N, D]
-            labels  : [N]
+            minput  : momentum backbone features [N, D] (quality indicator)
+            labels  : identity labels [N]
 
         Returns:
-            [pre*s, logits], norms, loss_g, one_hot
+            [pre_margin_logits, logits], norms, loss_g, one_hot
         """
         with autocast(device_type='cuda'):
             # ---- feature norms (from clean feats) ----
-            norms = torch.norm(feats, p=2, dim=1, keepdim=True)          # [N,1]
+            norms = torch.norm(feats, p=2, dim=1, keepdim=True)          # [N, 1]
 
-            # ---- L2-normalize clean feats ----
-            feats_norm = F.normalize(feats, dim=1)                       # [N,D]
-            weight_norm = F.normalize(self.weight, dim=1)                # [C,D]
+            # ---- one-hot encoding ----
+            one_hot = torch.zeros(feats.size(0), self.num_class, device=feats.device)
+            one_hot.scatter_(1, labels.view(-1, 1).long(), 1.0)
 
-            # ---- base cosine (weight) ----
-            cosine_weight = F.linear(feats_norm, weight_norm)            # [N,C]
+            # ---- L2-normalize ----
+            feats_norm = F.normalize(feats, dim=1)                       # [N, D]
+            weight_norm = F.normalize(self.weight, dim=1)                # [C, D]
 
-            # ---- one-hot ----
-            one_hot = torch.zeros(cosine_weight.size(), device=cosine_weight.device)
-            one_hot.scatter_(1, labels.view(-1, 1), 1.0)
+            # ---- base cosine similarity ----
+            cosine_weight = F.linear(feats_norm, weight_norm)            # [N, C]
 
-            if self.norm_training_flag:
-                # ---- magnitude stats (EMA) from minput ----
-                mag_minput = torch.norm(minput, p=2, dim=1, keepdim=True)  # [N,1]
-                mag_mean = mag_minput.mean()
-                mag_std = mag_minput.std()
+            if self.norm_training_flag and self.training:
+                with torch.no_grad():
+                    # ---- compute quality indicator from minput magnitude ----
+                    mag_minput = torch.norm(minput, p=2, dim=1, keepdim=True)  # [N, 1]
+                    
+                    # ---- update EMA statistics ----
+                    if self._init_flag == 0:
+                        self.muy = mag_minput.mean()
+                        self.std = mag_minput.std()
+                        self._init_flag = torch.tensor(1)
+                    else:
+                        self.muy = self.alpha * self.muy + (1 - self.alpha) * mag_minput.mean()
+                        self.std = self.alpha * self.std + (1 - self.alpha) * mag_minput.std()
 
-                if self.muy == 0.0:  # first batch
-                    self.muy = mag_mean
-                    self.std = mag_std
-                else:
-                    self.muy = self.alpha * self.muy + (1 - self.alpha) * mag_mean
-                    self.std = self.alpha * self.std + (1 - self.alpha) * mag_std
+                    # ---- normalize magnitude ----
+                    norm_mag_minput = (mag_minput - self.muy) / (self.std + 1e-6)  # [N, 1]
+                    
+                    # ---- compute injection vector ----
+                    injection_weight = self.injection_cal(norm_mag_minput)  # [N, 1]
+                    injection = injection_weight * minput / (mag_minput + 1e-6)  # [N, D]
 
-                # ---- normalize magnitude ----
-                norm_mag_minput = (mag_minput - self.muy) / (self.std + 1e-6)  # [N,1]
-                injection_mask = self.injection_cal(norm_mag_minput.squeeze(1))  # [N]
-                injection = injection_mask.unsqueeze(1) * minput / (mag_minput + 1e-6)  # [N,D]
-
-                # ---- update memory & life ----
-                valid_idx = torch.where(labels != -1)[0]
-                if valid_idx.numel() > 0:
-                    unique_labels = torch.unique(labels[valid_idx])
-                    with torch.no_grad():
-                        for cls in unique_labels:
-                            cls_mask = (labels == cls)
-                            cls_inj = injection[cls_mask]
-                            if cls_inj.size(0) > 0:
+                    # ---- update memory bank ----
+                    unique_labels = torch.unique(labels)
+                    for cls in unique_labels:
+                        cls_mask = (labels == cls)
+                        cls_inj = injection[cls_mask]
+                        if cls_inj.size(0) > 0:
+                            # Average injection for this class
+                            if cls_inj.dim() == 2:
                                 self.mem[cls] = cls_inj.mean(dim=0)
-                                self.life[cls] = self.delta
+                            else:
+                                self.mem[cls] = cls_inj
+                            # Reset life counter
+                            self.life[cls] = self.delta
 
-                    # decay life
+                    # ---- decay life counter ----
                     self.life = self.life - 1
-                    active_mask = (self.life > 0).float().unsqueeze(0)   # [1,C]
+                    self.life = torch.clamp(self.life, min=0)
+                    
+                    # ---- active memory mask ----
+                    active_mask = (self.life > 0).float().unsqueeze(0)   # [1, C]
 
-                    # ---- cosine with memory ----
-                    mem_norm = F.normalize(self.mem, dim=1)
-                    cosine_mem = F.linear(feats_norm, mem_norm)         # [N,C]
+                # ---- cosine with memory (for non-target classes) ----
+                mem_norm = F.normalize(self.mem, dim=1)                  # [C, D]
+                cosine_mem = F.linear(feats_norm, mem_norm)              # [N, C]
+                
+                # cosine1: use memory if active, else use weight
+                cosine1 = (1 - active_mask) * cosine_weight + active_mask * cosine_mem
 
-                    # ---- cosine1: memory interpolation (non-target) ----
-                    cosine1 = (1 - active_mask) * cosine_weight + active_mask * cosine_mem
+                # ---- cosine2: target class with injection ----
+                target_weight = self.weight[labels.long()] + injection   # [N, D]
+                target_weight_norm = F.normalize(target_weight, dim=1)   # [N, D]
+                cosine2 = (feats_norm * target_weight_norm).sum(dim=1, keepdim=True)  # [N, 1]
+                cosine2 = cosine2.expand(-1, self.num_class)             # [N, C]
 
-                    # ---- cosine2: target with injection ----
-                    target_weight = self.weight[labels] + injection          # [N,D]
-                    target_weight_norm = F.normalize(target_weight, dim=1)
-                    cosine2 = (feats_norm * target_weight_norm).sum(dim=1, keepdim=True)  # [N,1]
-                    cosine2 = cosine2.expand(-1, self.num_class)            # [N,C]
-
-                    # ---- final cosine ----
-                    cosine = one_hot * cosine2 + (1.0 - one_hot) * cosine1
-                else:
-                    cosine = cosine_weight
+                # ---- combine: target uses cosine2, others use cosine1 ----
+                cosine = one_hot * cosine2 + (1.0 - one_hot) * cosine1
             else:
+                # Standard mode (warming phase)
                 cosine = cosine_weight
 
-            # ---- clamp ----
+            # ---- clamp to valid range ----
             cosine = cosine.clamp(-1 + 1e-7, 1 - 1e-7)
             cosine_cp = cosine.clone()
 
-            # ---- ArcFace margin ----
+            # ---- ArcFace margin: cos(θ + m) ----
             sine = torch.sqrt(1.0 - cosine**2 + 1e-9)
             phi = cosine * self.cos_m - sine * self.sin_m
 
@@ -1504,7 +1521,7 @@ class QAFace(nn.Module):
             else:
                 phi = torch.where(cosine > self.th, phi, cosine - self.mm)
 
-            # ---- combine ----
+            # ---- apply margin only to target class ----
             output = one_hot * phi + (1.0 - one_hot) * cosine
             output = output * self.s
 
@@ -1512,24 +1529,32 @@ class QAFace(nn.Module):
 
         return [pre_margin_logits, output], norms, 0, one_hot
 
-    # --------------------------------------------------------------------
-    def _model_parallel_cos(self, x_norm, w_norm):
-        sub_weights = torch.chunk(w_norm, len(self.device_id), dim=0)
-        out = []
-        for i, dev in enumerate(self.device_id):
-            xi = x_norm.to(dev)
-            wi = sub_weights[i].to(dev)
-            out.append(F.linear(xi, wi))
-        return torch.cat(out, dim=1).to(self.device_id[0])
-    
 class QAFaceNet(nn.Module):
     """
-    Backbone → (clean + minput) → QAFace head
+    QAFace Network: Backbone → (main + momentum) → QAFace head
+    
+    Uses two backbones:
+    - backbone: regular trainable network
+    - mbackbone: momentum-updated network (quality indicator)
     """
-    def __init__(self, num_classes: int, backbone=BACKBONE):
+    def __init__(self, num_classes: int, backbone=BACKBONE, gamma: float = 0.99):
         super().__init__()
+        
+        # ---- Main backbone ----
         self.backbone = get_backbone(backbone)
+        
+        # ---- Momentum backbone (initialized as copy) ----
+        self.mbackbone = get_backbone(backbone)
+        from copy import deepcopy
+        self.mbackbone.load_state_dict(deepcopy(self.backbone.state_dict()))
+        
+        # Freeze momentum backbone (no gradient needed)
+        for param in self.mbackbone.parameters():
+            param.requires_grad = False
+        
+        self.gamma = gamma  # momentum coefficient
 
+        # ---- QAFace head ----
         self.qaface = QAFace(
             feat_dim=FEATURE_DIM,
             num_class=num_classes,
@@ -1541,21 +1566,46 @@ class QAFaceNet(nn.Module):
             alpha=ALPHA_qa
         )
         self.loss_model = "qaface"
-        print(f"Initialize QAFace model with backbone {backbone}")
-
-    def forward(self, x_clean, x_minput=None, labels=None):
-        feats_clean = self.backbone(x_clean)
-        if x_minput is None:
-            x_minput = feats_clean  # fallback
-        feats_minput = self.backbone(x_minput) if x_minput is not None else feats_clean
-
-        if self.training:
-            assert labels is not None
-            return self.qaface(feats_clean, feats_minput, labels)
-        return feats_clean
+        print(f"Initialize QAFace model with backbone {backbone}, gamma={gamma}")
 
     def change_training_mode(self, flag: bool):
+        """Switch between warming and norm training"""
         self.qaface.change_training_mode(flag)
 
+    @torch.no_grad()
+    def update_momentum_backbone(self):
+        """
+        Update momentum backbone using EMA:
+        θ_momentum = γ * θ_momentum + (1 - γ) * θ_main
+        
+        Call this AFTER optimizer.step() in training loop
+        """
+        for param_main, param_momentum in zip(self.backbone.parameters(), 
+                                               self.mbackbone.parameters()):
+            param_momentum.data.mul_(self.gamma).add_(param_main.data, alpha=1 - self.gamma)
 
+    def forward(self, x, labels=None):
+        """
+        Args:
+            x: input images [N, 3, H, W]
+            labels: identity labels [N] (required in training)
+        
+        Returns:
+            training: [pre_margin_logits, logits], norms, loss_g, one_hot
+            inference: features [N, D]
+        """
+        if self.training:
+            assert labels is not None, "Labels required in training mode"
+            
+            # Forward through both backbones
+            feats_main = self.backbone(x)
+            
+            with torch.no_grad():
+                feats_momentum = self.mbackbone(x)
+            
+            # QAFace forward
+            return self.qaface(feats_main, feats_momentum, labels)
+        else:
+            # Inference: only use main backbone
+            return self.backbone(x)
 

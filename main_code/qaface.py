@@ -1,4 +1,4 @@
-# ver 2
+# qaface_train.py
 
 import os
 import sys
@@ -22,9 +22,7 @@ if __name__ == '__main__':
                 project_name="qaface-training",
                 model_final_filename="qaface_final.pth",
                 model_best_filename="qaface_best.pth",
-                num_classes=10575, # 10575 for CASIA-webface
+                num_classes=10575,  # 10575 for CASIA-webface
                 working_path=WORKING_PATH,
                 dataset_path=DATASET_PATH
             )
-
-            

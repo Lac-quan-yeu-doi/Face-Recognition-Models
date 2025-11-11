@@ -489,6 +489,10 @@ def main_pipeline(
 
     # === Training Loop ===
     for epoch in range(start_epoch, args.epochs + start_epoch):
+        if epoch == 5 and model_name in ['VPLArcFace', 'QAFace']:
+            print("### Warm-up phase completed, switch to normal training ###")
+            model.change_training_mode(True)
+
         train_loss = train_model(model, train_loader, criterion, optimizer, scaler, device, epoch, args.epochs + start_epoch - 1, args)
 
         if train_loss < min_train_loss:
