@@ -146,7 +146,7 @@ def custom_collate_fn(batch):
         return None
     return torch.utils.data.dataloader.default_collate(batch)
 
-def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch, epochs, args):
+def train_model(model, model_name, train_loader, criterion, optimizer, scaler, device, epoch, epochs, args):
     model.train()
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -178,8 +178,18 @@ def train_model(model, train_loader, criterion, optimizer, scaler, device, epoch
         with autocast(device_type='cuda'):
             output, norm, loss_g, one_hot = model(images, target)
             cosine_s, logits = output
-            loss_id = criterion(logits, target)
+            if model_name not in ['SphereFace2', 'UniFace',"UniTSFace"]:
+                loss_id = criterion(logits, target)
+            else:
+                loss_id = logits
             loss = loss_id + args.lambda_g * loss_g
+            if torch.isnan(loss) or torch.isinf(loss):
+                print("❌ Training stopped: loss is NaN or Inf.")
+                print(f"loss value: {loss.item()}")
+                notify_pushover(model_name, 'nan' if torch.isnan(loss) else 'inf')
+                exit()  # or sys.exit(1)
+            
+            
         acc1, acc5 = accuracy(cosine_s, target, topk=(1, 5))
 
         optimizer.zero_grad()
@@ -379,7 +389,7 @@ def parse_args():
     parser.add_argument('--learning_rate', '-lr', type=float, default=0.1)
     # parser.add_argument('--backbone', '-bb', type=str, default='resnet18')
     parser.add_argument('--lambda_g', type=float, default=0.0, help="Magnitude loss weight")
-    parser.add_argument('--print_freq', type=int, default=2000)
+    parser.add_argument('--print_freq', type=int, default=2)
     parser.add_argument(
         '--continue_train',
         choices=['min_loss', 'latest'],
@@ -404,7 +414,7 @@ def parse_args():
     )
     return parser.parse_args()
 
-def notify_pushover(model_name):
+def notify_pushover(model_name, type):
     def get_device_name():
         return socket.gethostname()
 
@@ -421,7 +431,11 @@ def notify_pushover(model_name):
     user_key = os.getenv('PUSHOVER_API_USER_KEY')
     app_token = os.getenv('PUSHOVER_API_TOKEN')
     url = "https://api.pushover.net/1/messages.json"
-    message = f"{model_name} - {get_device_name()} - {get_gpu_name()} - finished 🚀"
+    if type == "finished":
+        message = f"{model_name} - {get_device_name()} - {get_gpu_name()} - finished 🚀"
+    elif type in ['nan', 'inf']:
+        message = f"{model_name} - {get_device_name()} - {get_gpu_name()} - stopped due to {type.upper()} loss ❌"
+        
     data = {"token": app_token, "user": user_key, "message": message}
     requests.post(url, data=data)
     print("### Notification is sent ###")
@@ -493,7 +507,7 @@ def main_pipeline(
             print("### Warm-up phase completed, switch to normal training ###")
             model.change_training_mode(True)
 
-        train_loss = train_model(model, train_loader, criterion, optimizer, scaler, device, epoch, args.epochs + start_epoch - 1, args)
+        train_loss = train_model(model, model_name, train_loader, criterion, optimizer, scaler, device, epoch, args.epochs + start_epoch - 1, args)
 
         if train_loss < min_train_loss:
             min_train_loss = train_loss
@@ -520,7 +534,7 @@ def main_pipeline(
     end_time = time.time()
     print(f"Code runs in {end_time - start_time}s")
 
-    notify_pushover(model_name)
+    notify_pushover(model_name, 'finished')
 
     wandb.finish()
     # return model, mean_acc

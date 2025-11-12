@@ -69,6 +69,25 @@ U_MARGIN_mag    = 0.8
 L_A_mag         = 10.0
 U_A_mag         = 110.0
 
+# SphereFace2
+LAMBDA_sf2 = 0.7          # Balance between positive/negative pairs (λ)
+R_sf2 = 40.0             # Scale factor for logits
+M_sf2 = 0.4              # Angular margin
+T_sf2 = 3.0              # Power for g(cos θ) transformation
+LW_sf2 = 50.0            # Loss weight multiplier
+
+# UniFace
+M_uniface = 0.4          # Margin for positive samples
+S_uniface = 64.0         # Scale factor (temperature)
+L_uniface = 1.0          # Weight for negative loss (lambda/balance)
+R_uniface = 1.0          # Bias initialization multiplier
+
+# UnitFace
+M_units = 0.4              # margin for normalized softmax
+S_units = 64               # scale
+L_units = 1.0            # λ for combining the two losses
+R_units = 1.0            # regularization or balancing
+
 # QAFace
 S_qa            = 64.0
 M_qa            = 0.50
@@ -77,3 +96,6 @@ DELTA_qa        = 1000      # memory lifetime (steps)
 TTO_qa          = 2.0       # threshold for injection (in std space)
 ALPHA_qa        = 0.99      # EMA coefficient for magnitude stats
 GAMMA_qa        = 0.99      # momentum coefficient for mbackbone
+
+
+

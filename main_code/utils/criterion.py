@@ -1,6 +1,7 @@
 import math
 import torch
 import torch.nn as nn
+from torch.nn import Parameter
 import torch.nn.functional as F
 from torch.amp import autocast
 from torchvision.models import resnet50, resnet18, ResNet18_Weights, ResNet50_Weights, efficientnet_b0, EfficientNet_B0_Weights, mobilenet_v2, MobileNet_V2_Weights
@@ -1330,6 +1331,588 @@ class MagFaceNet(nn.Module):
             assert labels is not None
             return self.magface(feats, labels)
         return feats
+
+class SphereFace2(nn.Module):
+    """
+    SphereFace2: Binary Classification is All You Need for Deep Face Recognition
+    Paper: https://arxiv.org/abs/2108.01513
+    
+    This is the SphereFace2-C variant (Cartesian mode).
+    """
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 device_id=None,
+                 alpha: float = 0.7,
+                 r: float = 40.0,
+                 m: float = 0.4,
+                 t: float = 3.0,
+                 lw: float = 50.0):
+        """
+        Args:
+            in_features: Feature embedding dimension
+            out_features: Number of classes/subjects
+            device_id: Device ID for model parallelism (optional)
+            alpha: Balance between positive/negative pairs (λ in paper Eq. 5)
+            r: Scale factor for logits
+            m: Angular margin
+            t: Power for g(cos θ) transformation
+            lw: Loss weight multiplier
+        """
+        super().__init__()
+        
+        self.in_features = in_features
+        self.out_features = out_features
+        self.device_id = device_id
+        
+        # SphereFace2 hyperparameters
+        self.alpha = alpha  # lambda in paper
+        self.r = r
+        self.m = m
+        self.t = t
+        self.lw = lw
+        
+        # Class prototype weights
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        nn.init.xavier_normal_(self.weight)
+        
+        # Initialize bias using closed-form solution from paper
+        z = alpha / ((1. - alpha) * (out_features - 1.))
+        ay = r * (2. * 0.5**t - 1. - m)
+        ai = r * (2. * 0.5**t - 1. + m)
+        
+        temp = (1. - z)**2 + 4. * z * math.exp(ay - ai)
+        b = math.log(2. * z) - ai - math.log(1. - z + math.sqrt(temp))
+        self.b = nn.Parameter(torch.Tensor(1))
+        nn.init.constant_(self.b, b)
+        
+        print(f"init SphereFace2 → α={self.alpha}, r={self.r}, m={self.m}, t={self.t}, lw={self.lw}")
+
+    # --------------------------------------------------------------------
+    # Helper methods
+    # --------------------------------------------------------------------
+    
+    @staticmethod
+    def softplus_wrapping(raw_feats):
+        '''
+        Args:
+            raw_feats: (B, L) or (B, C, L)
+        Returns:
+            out: (B, L) or (B, C, L)
+        '''
+        mags = F.softplus(raw_feats[..., :1], beta=1)
+        feats = mags * F.normalize(raw_feats[..., 1:], dim=-1)
+        return feats
+
+    def get_wrapping(self, mode):
+        if mode == 'cartesian':
+            f_wrapping = lambda raw_feats: raw_feats
+        elif mode == 'polarlike':
+            f_wrapping = self.softplus_wrapping
+        else:
+            raise ValueError('mode must be `cartesian` or `polarlike`')
+        return f_wrapping
+
+    @staticmethod
+    def weighted_average(feats, weights=None, pre_norm=False, post_norm=True):
+        '''
+        Args:
+            feats: (B, C, L) or (C, L)
+            B: batch size
+            C: the number of observations from the same subject
+            L: feature dimension
+            weights: None or (C, ), weights for each observation
+            pre_norm: normalize the features before fusion
+            post_norm: normalize the fused feature
+        Returns:
+            fuse_feat: (B, L) or (L, )
+        '''
+        if weights is None:
+            weights = torch.ones(feats.size(-2))
+        weights = weights / weights.sum()
+        weights = weights.to(feats.device)
+
+        assert weights.ndim == 1
+        if feats.ndim == 2:
+            weights = weights.view(-1, 1)
+        elif feats.ndim == 3:
+            weights = weights.view(1, -1, 1)
+        else:
+            raise ValueError("Invalid shape for `feats`")
+
+        if pre_norm:
+            feats = F.normalize(feats, dim=-1)
+        fuse_feat = torch.sum(weights * feats, dim=-2)
+        if post_norm:
+            fuse_feat = F.normalize(fuse_feat, dim=-1)
+
+        return fuse_feat
+
+    def get_fusing(self, pre_norm, post_norm):
+        f_fusing = lambda feats, weights=None: \
+            self.weighted_average(feats, weights, pre_norm, post_norm)
+        return f_fusing
+
+    @staticmethod
+    def generalized_inner_product(feats_1, feats_2, b_theta=0., all_pairs=False):
+        '''
+        Args:
+            feats_1: (B1, L)
+            feats_2: (B2, L)
+        Returns:
+            scores: (B1, )   if all_pairs is False and B1==B2 
+                    (B1, B2) if all_pairs is True
+        '''
+        assert feats_1.ndim == feats_2.ndim == 2
+        assert feats_1.size(1) == feats_2.size(1)
+
+        mags_1 = torch.norm(feats_1, p=2, dim=1, keepdim=True)
+        mags_2 = torch.norm(feats_2, p=2, dim=1, keepdim=True)
+        if all_pairs:
+            scores = feats_1.mm(feats_2.t()) - (b_theta * mags_1).mm(mags_2.t())
+        else:
+            scores = (feats_1 * feats_2).sum(dim=1) - (b_theta * mags_1 * mags_2).flatten()
+        return scores
+
+    def get_scoring(self, b_theta):
+        f_scoring = lambda feats_1, feats_2, all_pairs=False: \
+            self.generalized_inner_product(feats_1, feats_2, b_theta, all_pairs)
+        return f_scoring
+
+    # --------------------------------------------------------------------
+    def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
+        """Return raw class centers for given labels."""
+        return self.weight.permute(1, 0)[:, labels].clone().detach()
+
+    # --------------------------------------------------------------------
+    def forward(self, input: torch.Tensor, label: torch.Tensor):
+        """
+        Args:
+            input: Feature embeddings [N, in_features]
+            label: Ground truth labels [N]
+        
+        Returns:
+            [cos_theta_scaled, output]: Similarity scores and logits
+            norms: Feature norms
+            loss: Binary cross-entropy loss
+            one_hot: One-hot encoded labels
+        """
+        with autocast(device_type='cuda'):
+            # Compute feature norms
+            norms = torch.norm(input, p=2, dim=1, keepdim=True)  # [N, 1]
+            
+            # Normalize weights to unit sphere
+            with torch.no_grad():
+                self.weight.data = F.normalize(self.weight.data, dim=-1)
+            
+            # Get processing functions
+            f_wrapping = self.get_wrapping(mode='cartesian')
+            f_fusing = self.get_fusing(pre_norm=False, post_norm=True)
+            f_scoring = self.get_scoring(b_theta=0.)
+            
+            # Apply wrapping (identity in Cartesian mode)
+            x = f_wrapping(input)
+            
+            # Fusing (normalization)
+            x = f_fusing(x[:, None, :])
+            
+            # Compute cosine similarity with all class centers
+            cos_theta = f_scoring(x, self.weight, all_pairs=True)
+            
+            # Create one-hot encoding
+            one_hot = torch.zeros_like(cos_theta)
+            if self.device_id is not None:
+                one_hot = one_hot.cuda(self.device_id[0])
+            one_hot.scatter_(1, label.view(-1, 1), 1.)
+            
+            # Apply margin transformation
+            with torch.no_grad():
+                # g(cos θ) = 2 * [(cos θ + 1) / 2]^t - 1
+                g_cos_theta = 2. * ((cos_theta + 1.) / 2.).pow(self.t) - 1.
+                # Add margin: +m for positive pairs, -m for negative pairs
+                g_cos_theta = g_cos_theta - self.m * (2. * one_hot - 1.)
+                # Delta θ
+                d_theta = g_cos_theta - cos_theta
+            
+            # Compute logits with scale and bias
+            logits = self.r * (cos_theta + d_theta) + self.b
+            
+            # Compute weighted binary cross-entropy loss
+            weight = self.alpha * one_hot + (1. - self.alpha) * (1. - one_hot)
+            weight = self.lw * self.out_features / self.r * weight
+            loss = F.binary_cross_entropy_with_logits(logits, one_hot, weight=weight)
+            
+
+        return [cos_theta, loss], norms, 0, one_hot
+
+class SphereFace2Net(nn.Module):
+    """
+    Backbone → embedding → SphereFace2 head
+    """
+    def __init__(self, num_classes: int, backbone=BACKBONE):
+        """
+        Args:
+            num_classes: Number of identity classes
+            backbone: Backbone network (e.g., 'BACKBONE' variable)
+        """
+        super().__init__()
+        
+        # ----- Backbone -----
+        self.backbone = get_backbone(backbone)
+        
+        # ----- SphereFace2 head -----
+        self.sphereface2 = SphereFace2(
+            in_features=FEATURE_DIM,
+            out_features=num_classes,
+            alpha=LAMBDA_sf2,
+            r=R_sf2,
+            m=M_sf2,
+            t=T_sf2,
+            lw=LW_sf2
+        )
+        
+        self.loss_model = "sphereface2"  # for logging / compatibility
+        print(f"Initialize SphereFace2 model with backbone {backbone}")
+
+    # ----------------------------------------------------------------
+    def forward(self, x: torch.Tensor, labels: torch.Tensor | None = None):
+        """
+        Args:
+            x: Input images [N, C, H, W]
+            labels: Ground truth labels [N] (required during training)
+        
+        Returns:
+            Training mode: [cos_theta_scaled, logits], norms, loss, one_hot
+            Inference mode: Feature embeddings [N, FEATURE_DIM]
+        """
+        feats = self.backbone(x)  # [N, FEATURE_DIM]
+        
+        if self.training:
+            assert labels is not None
+            # Returns: [cos*||x||, logits], norms, loss, one_hot
+            return self.sphereface2(feats, labels)
+        else:
+            return feats
+
+class UniFace(nn.Module):
+    """
+    Unified Cross-Entropy Loss (UniFace)
+    
+    A unified loss function that combines positive and negative sample learning
+    with margin-based binary classification.
+    """
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 device_id=None,
+                 m: float = 0.4,
+                 s: float = 64.0,
+                 l: float = 1.0,
+                 r: float = 1.0):
+        """
+        Args:
+            in_features: Feature embedding dimension
+            out_features: Number of classes/subjects
+            device_id: Device ID for model parallelism (optional)
+            m: Margin for positive samples
+            s: Scale factor (similar to temperature)
+            l: Weight for negative loss
+            r: Multiplier for bias initialization
+        """
+        super().__init__()
+        
+        self.in_features = in_features
+        self.out_features = out_features
+        self.device_id = device_id
+        
+        # UniFace hyperparameters
+        self.m = m  # Margin
+        self.s = s  # Scale
+        self.l = l  # Negative loss weight (lambda)
+        self.r = r  # Bias multiplier
+        
+        # Class prototype weights
+        self.weight = Parameter(torch.empty(out_features, in_features))
+        nn.init.kaiming_normal_(self.weight, a=1, mode='fan_in', nonlinearity='leaky_relu')
+        
+        # Weight momentum buffer (for potential momentum updates)
+        self.register_buffer('weight_mom', torch.zeros_like(self.weight))
+        
+        # Bias initialization
+        self.bias = Parameter(torch.FloatTensor(1))
+        nn.init.constant_(self.bias, math.log(out_features * r * 10))
+        
+        print(f"init UniFace → m={self.m}, s={self.s}, l={self.l}, r={self.r}")
+
+    # --------------------------------------------------------------------
+    def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
+        """Return raw class centers for given labels."""
+        return self.weight.permute(1, 0)[:, labels].clone().detach()
+
+    # --------------------------------------------------------------------
+    def forward(self, input: torch.Tensor, label: torch.Tensor):
+        """
+        Args:
+            input: Feature embeddings [N, in_features]
+            label: Ground truth labels [N]
+        
+        Returns:
+            [cos_theta_scaled, loss]: Similarity scores and loss value
+            norms: Feature norms
+            0: Placeholder for compatibility
+            one_hot: One-hot encoded labels
+        """
+        with autocast(device_type='cuda'):
+            # Compute feature norms
+            norms = torch.norm(input, p=2, dim=1, keepdim=True)  # [N, 1]
+            
+            # Compute cosine similarity (both features and weights are normalized)
+            if self.device_id is None:
+                cos_theta = F.linear(
+                    F.normalize(input, eps=1e-5), 
+                    F.normalize(self.weight, eps=1e-5)
+                )
+            else:
+                # Model parallel version
+                sub_weights = torch.chunk(self.weight, len(self.device_id), dim=0)
+                temp_x = input.cuda(self.device_id[0])
+                weight = sub_weights[0].cuda(self.device_id[0])
+                cos_theta = F.linear(
+                    F.normalize(temp_x, eps=1e-5),
+                    F.normalize(weight, eps=1e-5)
+                )
+                for i in range(1, len(self.device_id)):
+                    temp_x = input.cuda(self.device_id[i])
+                    weight = sub_weights[i].cuda(self.device_id[i])
+                    cos_theta = torch.cat((
+                        cos_theta,
+                        F.linear(
+                            F.normalize(temp_x, eps=1e-5),
+                            F.normalize(weight, eps=1e-5)
+                        ).cuda(self.device_id[0])
+                    ), dim=1)
+            
+            # Apply margin and scale for positive samples
+            cos_m_theta_p = self.s * (cos_theta - self.m) - self.bias
+            # Apply scale for negative samples (no margin)
+            cos_m_theta_n = self.s * cos_theta - self.bias
+            
+            # Compute positive and negative losses
+            # Clamp to prevent overflow
+            p_loss = torch.log(1 + torch.exp(-cos_m_theta_p.clamp(min=-self.s, max=self.s)))
+            n_loss = torch.log(1 + torch.exp(cos_m_theta_n.clamp(min=-self.s, max=self.s))) * self.l
+            
+            # Create one-hot encoding
+            one_hot = torch.zeros((label.size(0), self.out_features), dtype=torch.bool)
+            if self.device_id is not None:
+                one_hot = one_hot.cuda(self.device_id[0])
+            elif cos_theta.is_cuda:
+                one_hot = one_hot.cuda()
+            one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+            
+            # Combine positive and negative losses
+            loss = one_hot * p_loss + (~one_hot) * n_loss
+            
+            # Scale cos_theta for output
+            cos_theta_scaled = cos_theta * self.s
+            
+            # Average loss over batch
+            final_loss = loss.sum(dim=1).mean()
+            
+        return [cos_theta_scaled, final_loss], norms, 0, one_hot
+
+    # --------------------------------------------------------------------
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+               + 'in_features=' + str(self.in_features) \
+               + ', out_features=' + str(self.out_features) \
+               + ', m=' + str(self.m) \
+               + ', s=' + str(self.s) \
+               + ', l=' + str(self.l) \
+               + ', r=' + str(self.r) + ')'
+
+class UniFaceNet(nn.Module):
+    """
+    Backbone → embedding → UniFace head
+    """
+    def __init__(self, num_classes: int, backbone=BACKBONE):
+        """
+        Args:
+            num_classes: Number of identity classes
+            backbone: Backbone network (e.g., 'BACKBONE' variable)
+        """
+        super().__init__()
+        
+        # ----- Backbone -----
+        self.backbone = get_backbone(backbone)
+        
+        # ----- UniFace head -----
+        self.uniface = UniFace(
+            in_features=FEATURE_DIM,
+            out_features=num_classes,
+            m=M_uniface,
+            s=S_uniface,
+            l=L_uniface,
+            r=R_uniface
+        )
+        
+        self.loss_model = "uniface"  # for logging / compatibility
+        print(f"Initialize UniFace model with backbone {backbone}")
+
+    # ----------------------------------------------------------------
+    def forward(self, x: torch.Tensor, labels: torch.Tensor | None = None):
+        """
+        Args:
+            x: Input images [N, C, H, W]
+            labels: Ground truth labels [N] (required during training)
+        
+        Returns:
+            Training mode: [cos_theta_scaled, loss], norms, 0, one_hot
+            Inference mode: Feature embeddings [N, FEATURE_DIM]
+        """
+        feats = self.backbone(x)  # [N, FEATURE_DIM]
+        
+        if self.training:
+            assert labels is not None
+            # Returns: [cos_theta*s, loss], norms, 0, one_hot
+            return self.uniface(feats, labels)
+        else:
+            return feats
+
+# UniTSFace components
+class Normalized_Softmax_Loss(nn.Module):
+    def __init__(self, in_features, out_features, m=0.4, s=64):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.m = m
+        self.s = s
+        self.weight = Parameter(torch.FloatTensor(out_features, in_features))
+        nn.init.kaiming_normal_(self.weight, a=1, mode='fan_in', nonlinearity='leaky_relu')
+        print(f"Init Normalized Softmax Loss → m={self.m}, s={self.s}")
+
+    def forward(self, input, label):
+        cos_theta = F.linear(F.normalize(input, eps=1e-5), F.normalize(self.weight, eps=1e-5))
+
+        one_hot = torch.zeros_like(cos_theta, dtype=torch.bool)
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+
+        d_theta = one_hot * self.m
+        logits = self.s * (cos_theta - d_theta)
+
+        loss = F.cross_entropy(logits, label)
+        return cos_theta * self.s, loss, one_hot
+
+class Unified_Threshold_Integrated_Sample_to_Sample_Loss(nn.Module):
+    def __init__(self, in_features, out_features, m=0.1, s=64):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.m = m
+        self.s = s
+        self.register_buffer('feat_mem', torch.zeros(out_features, in_features))
+        self.bias = Parameter(torch.zeros(1))
+        print(f"Init UTISS Loss → m={self.m}, s={self.s}")
+
+    def forward(self, input, label):
+        cos_theta = F.linear(F.normalize(input, eps=1e-5), F.normalize(self.feat_mem, eps=1e-5))
+
+        one_hot = torch.zeros_like(cos_theta, dtype=torch.bool)
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+
+        if self.bias.data <= 0:
+            cos_n = cos_theta[~one_hot].view(label.size(0), -1)
+            cos_txs = torch.logsumexp(self.s * cos_n, dim=-1)
+            self.bias.data = cos_txs.mean().unsqueeze(-1).float().data
+
+        cos_m_theta_p = self.s * (cos_theta - self.m) - self.bias
+        cos_m_theta_n = self.s * cos_theta - self.bias
+        p_loss = torch.log(1 + torch.exp(-cos_m_theta_p.clamp(min=-self.s, max=self.s)))
+        n_loss = torch.log(1 + torch.exp(cos_m_theta_n.clamp(min=-self.s, max=self.s)))
+
+        loss = one_hot * p_loss + (~one_hot) * n_loss
+        return loss.sum(dim=1).mean()
+
+class UniTSFace(nn.Module):
+    """
+    UniTSFace: Unified Threshold Integrated Sample-to-Sample Loss
+    Paper: https://arxiv.org/abs/2309.04381  (if referencing)
+    """
+    def __init__(self, in_features, out_features, m=0.4, s=64, l=1.0, r=1.0):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.m = m
+        self.s = s
+        self.l = l
+        self.r = r
+
+        self.sample_to_class_loss = Normalized_Softmax_Loss(in_features, out_features, m=m, s=s)
+        self.sample_to_sample_loss = Unified_Threshold_Integrated_Sample_to_Sample_Loss(in_features, out_features, m=m, s=s)
+
+        print(f"init UniTSFace → m={self.m}, s={self.s}, λ={self.l}, r={self.r}")
+
+    # --------------------------------------------------------------------
+    def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
+        """Return raw class centers (sample-to-class) for given labels."""
+        return self.sample_to_class_loss.weight.permute(1, 0)[:, labels].clone().detach()
+
+    # --------------------------------------------------------------------
+    def forward(self, input: torch.Tensor, label: torch.Tensor, epoch: int = 0):
+        with autocast(device_type='cuda'):
+            norms = torch.norm(input, dim=1, keepdim=True)
+
+            # ----- Step 1: sample-to-class loss -----
+            cos_theta, L1, one_hot = self.sample_to_class_loss(input, label)
+
+            if epoch == 0:
+                return [cos_theta, L1], norms, 0, one_hot
+
+            # ----- Step 2: sample-to-sample loss -----
+            L2 = self.sample_to_sample_loss(input, label)
+
+            # ----- Update memory bank -----
+            with torch.no_grad():
+                unique_id = torch.unique(label).to(torch.int)
+                for i in unique_id:
+                    inj = input[label == i]
+                    if inj.ndim == 2:
+                        self.sample_to_sample_loss.feat_mem[i] = inj.mean(dim=0)
+                    else:
+                        self.sample_to_sample_loss.feat_mem[i] = inj
+
+            total_loss = L1 + L2
+            return [cos_theta, total_loss], norms, 0, one_hot
+
+class UniTSFaceNet(nn.Module):
+    """
+    Backbone → embedding → UniTSFace head
+    """
+    def __init__(self, num_classes: int, backbone=BACKBONE):
+        super().__init__()
+        self.backbone = get_backbone(backbone)
+
+        self.unitsface = UniTSFace(
+            in_features=FEATURE_DIM,
+            out_features=num_classes,
+            m=M_units,
+            s=S_units,
+            l=L_units,
+            r=R_units
+        )
+
+        self.loss_model = "unitsface"
+        print(f"Initialize UniTSFace model with backbone {backbone}")
+
+    # ----------------------------------------------------------------
+    def forward(self, x: torch.Tensor, labels: torch.Tensor | None = None, epoch: int = 0):
+        feats = self.backbone(x)
+
+        if self.training:
+            assert labels is not None
+            return self.unitsface(feats, labels, epoch)
+        else:
+            return feats
 
 class QAFace(nn.Module):
     """
