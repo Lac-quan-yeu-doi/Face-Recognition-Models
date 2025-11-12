@@ -389,7 +389,7 @@ def parse_args():
     parser.add_argument('--learning_rate', '-lr', type=float, default=0.1)
     # parser.add_argument('--backbone', '-bb', type=str, default='resnet18')
     parser.add_argument('--lambda_g', type=float, default=0.0, help="Magnitude loss weight")
-    parser.add_argument('--print_freq', type=int, default=2)
+    parser.add_argument('--print_freq', type=int, default=2000)
     parser.add_argument(
         '--continue_train',
         choices=['min_loss', 'latest'],
