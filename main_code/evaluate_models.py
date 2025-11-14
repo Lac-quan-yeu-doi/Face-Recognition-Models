@@ -18,10 +18,13 @@ model_names = {
     'MV_Softmax_arc': MV_SoftmaxNet,
     'CurricularFace': CurricularFaceNet,
     'VPLArcFace': VPLArcFaceNet,
+    'MagFace': MagFaceNet,
     'AdaFace': AdaFaceNet,
     'ElasticCosFace': ElasticCosFaceNet,
     'ElasticArcFace': ElasticArcFaceNet,
-    'MagFace': MagFaceNet,
+    'SphereFace2': SphereFace2Net,
+    'UniFace': UniFaceNet,
+    'UniTSFace': UniTSFaceNet,
     'QAFace': QAFaceNet,
 }
 
@@ -34,8 +37,8 @@ if os.path.exists(output_dir):
 os.makedirs(output_dir, exist_ok=True)
 
 num_classes = 10575
-backbone_name = "resnet50"
-batch_size = 128
+backbone_name = "iresnet100"
+batch_size = 64
 
 acc_records = []
 auc_records = []
