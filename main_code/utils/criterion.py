@@ -2330,8 +2330,8 @@ class QMagFaceNet(nn.Module):
                  u_margin: float = U_MARGIN_qmag,
                  l_a: float = L_A_qmag,
                  u_a: float = U_A_qmag,
-                 alpha: float = ALPHA_100_qmag,
-                 beta: float = BETA_100_qmag):
+                 alpha: float = ALPHA_qmag,
+                 beta: float = BETA_qmag):
         super().__init__()
 
         self.backbone = get_backbone(backbone)  # your backbone loader

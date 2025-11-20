@@ -98,18 +98,20 @@ ALPHA_qa        = 0.99      # EMA coefficient for magnitude stats
 GAMMA_qa        = 0.99      # momentum coefficient for mbackbone
 
 # QMagFace
-S_qmag            = 64.0
-EASY_MARGIN_qmag  = True
-L_MARGIN_qmag     = 0.45
-U_MARGIN_qmag     = 0.80
-L_A_qmag           = 10.0
-U_A_qmag           = 110.0
-ALPHA_18_qmag     = 0.092861
-BETA_18_qmag      = 0.135311
-ALPHA_50_qmag     = 0.065984
-BETA_50_qmag      = 0.103799
+S_qmag = 64.0
+EASY_MARGIN_qmag = True
+L_MARGIN_qmag = 0.45
+U_MARGIN_qmag = 0.80
+L_A_qmag  = 10.0
+U_A_qmag = 110.0
+ALPHA_18_qmag = 0.092861
+BETA_18_qmag = 0.135311
+ALPHA_50_qmag = 0.065984
+BETA_50_qmag = 0.103799
 ALPHA_100_qmag = 0.077428
-BETA_100_qmag     = 0.125926
+BETA_100_qmag = 0.125926
+ALPHA_qmag = ALPHA_100_qmag
+BETA_qmag  = BETA_100_qmag
 
 
 
