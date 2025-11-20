@@ -26,6 +26,7 @@ model_names = {
     'UniFace': UniFaceNet,
     'UniTSFace': UniTSFaceNet,
     'QAFace': QAFaceNet,
+    'QMagFace': QMagFaceNet
 }
 
 device       = 'cuda' if torch.cuda.is_available() else 'cpu'

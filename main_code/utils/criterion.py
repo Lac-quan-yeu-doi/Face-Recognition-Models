@@ -2192,3 +2192,173 @@ class QAFaceNet(nn.Module):
             # Inference: only use main backbone
             return self.backbone(x)
 
+class QMagFace(nn.Module):
+    """
+    QMagFace head – identical loss to MagFace, but we rename the class to QMagFace
+    for clarity (the whole approach is called QMagFace in the paper) and we add
+    the quality-aware similarity method + α/β parameters (used only at inference).
+    """
+    def __init__(self,
+                 feat_dim: int,
+                 num_class: int,
+                 s: float = S_qmag,
+                 easy_margin: bool = EASY_MARGIN_qmag,
+                 l_margin: float = L_MARGIN_qmag,
+                 u_margin: float = U_MARGIN_qmag,
+                 l_a: float = L_A_qmag,
+                 u_a: float = U_A_qmag,
+                 alpha: float = ALPHA_100_qmag,   # default = iResNet-100 values from paper
+                 beta: float = BETA_100_qmag,
+                 device_id=None):
+        super().__init__()
+        self.feat_dim   = feat_dim
+        self.num_class  = num_class
+        self.s          = s
+        self.easy_margin = easy_margin
+        self.l_margin   = l_margin
+        self.u_margin   = u_margin
+        self.l_a        = l_a
+        self.u_a        = u_a
+        self.alpha      = alpha      # ← quality-weighting α from paper
+        self.beta       = beta        # ← quality-weighting β from paper
+        self.device_id  = device_id
+
+        # class prototypes [D, C]
+        self.kernel = Parameter(torch.empty(feat_dim, num_class))
+        self.kernel.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
+
+        print(f"QMagFace → s={s:.1f}, easy_margin={easy_margin}, "
+              f"l_m={l_margin:.3f}, u_m={u_margin:.3f}, l_a={l_a}, u_a={u_a}, "
+              f"α={alpha:.6f}, β={beta:.6f}")
+
+    # --------------------------------------------------------------------
+    def _margin(self, x_norm: torch.Tensor) -> torch.Tensor:
+        """Adaptive margin (linear interpolation between l_margin and u_margin)"""
+        margin = (self.u_margin - self.l_margin) / (self.u_a - self.l_a) * (x_norm - self.l_a) + self.l_margin
+        return margin
+
+    # --------------------------------------------------------------------
+    def calc_loss_G(self, x_norm: torch.Tensor) -> torch.Tensor:
+        """Magnitude regularization loss G"""
+        g = 1 / (self.u_a ** 2) * x_norm + 1 / x_norm
+        return torch.mean(g)
+
+    # --------------------------------------------------------------------
+    def quality_aware_similarity(self, feat1: torch.Tensor, feat2: torch.Tensor) -> torch.Tensor:
+        """
+        Quality-aware cosine similarity (vectorised – supports both single pair and batch of pairs)
+        feat1, feat2: [N, D] (paired) or [D] (single pair)
+        """
+        if feat1.dim() == 1:
+            feat1 = feat1.unsqueeze(0)
+            feat2 = feat2.unsqueeze(0)
+
+        q1 = torch.norm(feat1, p=2, dim=1, keepdim=True)          # [N,1]
+        q2 = torch.norm(feat2, p=2, dim=1, keepdim=True)          # [N,1]
+
+        cos = torch.sum(feat1 * feat2, dim=1) / (q1 * q2 + 1e-6)      # [N]
+
+        omega = self.beta * cos - self.alpha
+        omega = torch.clamp(omega, max=0.0)                        # min(0, β·s - α)
+
+        q_min = torch.min(q1, q2).squeeze(-1)                     # [N]
+
+        return cos + omega * q_min
+
+    # --------------------------------------------------------------------
+    def forward(self, feats: torch.Tensor, labels: torch.Tensor):
+        with autocast(device_type='cuda'):
+            norms = torch.norm(feats, p=2, dim=1, keepdim=True)      # [N,1]
+            x_norm = norms.clamp(self.l_a, self.u_a)                 # [N,1]
+
+            loss_g = self.calc_loss_G(x_norm)
+
+            feats_norm = F.normalize(feats, dim=1)
+            weight_norm = F.normalize(self.kernel, dim=0)
+
+            if self.device_id is None:
+                cos_theta = torch.mm(feats_norm, weight_norm)
+            else:
+                # model-parallel version (rarely needed)
+                cos_theta = self._model_parallel_cos(feats_norm, weight_norm)
+
+            cos_theta = cos_theta.clamp(-1 + 1e-7, 1 - 1e-7)
+            cos_theta_cp = cos_theta.clone()
+
+            ada_margin = self._margin(x_norm)                       # [N,1]
+            cos_m = torch.cos(ada_margin)
+            sin_m = torch.sin(ada_margin)
+
+            sin_theta = torch.sqrt(1.0 - cos_theta**2 + 1e-9)
+            cos_theta_m = cos_theta * cos_m - sin_theta * sin_m
+
+            if self.easy_margin:
+                cos_theta_m = torch.where(cos_theta > 0, cos_theta_m, cos_theta)
+            else:
+                mm = torch.sin(math.pi - ada_margin) * ada_margin
+                threshold = torch.cos(math.pi - ada_margin)
+                cos_theta_m = torch.where(cos_theta > threshold, cos_theta_m, cos_theta - mm)
+
+            one_hot = torch.zeros_like(cos_theta)
+            one_hot.scatter_(1, labels.view(-1, 1), 1.0)
+
+            logits = one_hot * cos_theta_m + (1.0 - one_hot) * cos_theta
+            logits = logits * self.s
+
+            pre_margin_logits = cos_theta_cp * self.s
+
+        return [pre_margin_logits, logits], x_norm.squeeze(1), loss_g, one_hot
+
+    # --------------------------------------------------------------------
+    def _model_parallel_cos(self, x_norm, w_norm):
+        # kept for API compatibility (rarely used)
+        sub_weights = torch.chunk(w_norm, len(self.device_id), dim=1)
+        out = []
+        for i, dev in enumerate(self.device_id):
+            xi = x_norm.to(dev)
+            wi = sub_weights[i].to(dev)
+            out.append(torch.mm(xi, wi))
+        return torch.cat(out, dim=1).to(self.device_id[0])
+
+class QMagFaceNet(nn.Module):
+    def __init__(self,
+                 num_classes: int,
+                 backbone: str = 'iresnet100',
+                 s: float = S_qmag,
+                 easy_margin: bool = EASY_MARGIN_qmag,
+                 l_margin: float = L_MARGIN_qmag,
+                 u_margin: float = U_MARGIN_qmag,
+                 l_a: float = L_A_qmag,
+                 u_a: float = U_A_qmag,
+                 alpha: float = ALPHA_100_qmag,
+                 beta: float = BETA_100_qmag):
+        super().__init__()
+
+        self.backbone = get_backbone(backbone)  # your backbone loader
+
+        self.head = QMagFace(
+            feat_dim=FEATURE_DIM,
+            num_class=num_classes,
+            s=s,
+            easy_margin=easy_margin,
+            l_margin=l_margin,
+            u_margin=u_margin,
+            l_a=l_a,
+            u_a=u_a,
+            alpha=alpha,
+            beta=beta
+        )
+
+        self.loss_model = "qmagface"
+        print(f"Initialize QMagFaceNet with backbone {backbone}")
+
+    def forward(self, x, labels=None):
+        feats = self.backbone(x)
+        if self.training:
+            assert labels is not None
+            return self.head(feats, labels)
+        return feats
+
+    # convenient wrapper
+    def quality_aware_similarity(self, feat1, feat2):
+        return self.head.quality_aware_similarity(feat1, feat2)
