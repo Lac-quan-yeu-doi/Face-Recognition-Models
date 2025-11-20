@@ -2323,7 +2323,7 @@ class QMagFace(nn.Module):
 class QMagFaceNet(nn.Module):
     def __init__(self,
                  num_classes: int,
-                 backbone: str = 'iresnet100',
+                 backbone: str = BACKBONE,
                  s: float = S_qmag,
                  easy_margin: bool = EASY_MARGIN_qmag,
                  l_margin: float = L_MARGIN_qmag,
