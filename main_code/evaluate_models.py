@@ -14,8 +14,8 @@ model_names = {
     'SphereFace': SphereFaceNet,
     'CosFace': CosFaceNet,
     'ArcFace': ArcFaceNet,
-    'MV_Softmax_am': MV_SoftmaxNet,
-    'MV_Softmax_arc': MV_SoftmaxNet,
+    'MV_Softmax_cos': MV_SoftmaxCosNet,
+    'MV_Softmax_arc': MV_SoftmaxArcNet,
     'CurricularFace': CurricularFaceNet,
     'VPLArcFace': VPLArcFaceNet,
     'MagFace': MagFaceNet,
@@ -32,9 +32,6 @@ model_names = {
 device       = 'cuda' if torch.cuda.is_available() else 'cpu'
 model_folder = "models_evaluation"
 output_dir   = "evaluation_results"
-if os.path.exists(output_dir):
-    shutil.rmtree(output_dir)
-    print("### Remove old results ###")
 os.makedirs(output_dir, exist_ok=True)
 
 num_classes = 10575
@@ -56,14 +53,7 @@ for model_name, ModelClass in model_names.items():
         print(f"[Warning] {ckpt_path} not found → skipping model")
         continue
     try:
-        if model_name == 'MV_Softmax_am':
-            model = ModelClass(num_classes=num_classes, backbone=backbone_name)
-            model.mv_head.margin_type = 'am'
-        elif model_name == 'MV_Softmax_arc':
-            model = ModelClass(num_classes=num_classes, backbone=backbone_name)
-            model.mv_head.margin_type = 'arc'
-        else:
-            model = ModelClass(num_classes=num_classes, backbone=backbone_name)
+        model = ModelClass(num_classes=num_classes, backbone=backbone_name)
     except Exception as e:
         print(f"[Error] Failed to instantiate {model_name}: {e}")
         continue

@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# Check if a Python file is provided
-if [ -z "$1" ]; then
-  echo "❌ Usage: $0 <python_file> [options]"
-  echo "Example: $0 sphereface.py --batch_size 2048 --epochs 30 --learning_rate 0.05"
-  exit 1
-fi
+# # Check if a Python file is provided
+# if [ -z "$1" ]; then
+#   echo "❌ Usage: $0 <python_file> [options]"
+#   echo "Example: $0 sphereface.py --batch_size 2048 --epochs 30 --learning_rate 0.05"
+#   exit 1
+# fi
 
-PYTHON_FILE=$1
+PYTHON_FILE="train.py"
 shift  # Remove the first argument (the script name) from $@
 
 # Default values  

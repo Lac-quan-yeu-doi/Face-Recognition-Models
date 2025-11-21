@@ -12,6 +12,7 @@ BACKBONE = 'resnet50'
 
 FEATURE_DIM = 512
 LAMBDA_G = 0.0
+EPOCH_CHANGE_FLAG = 25
 
 # SphereFace
 M_sphere = 2
@@ -29,7 +30,6 @@ S_arc = 64.0
 M_mv        = 0.35
 WEIGHT_mv   = 1.12
 S_mv        = 32.0
-MARGIN_TYPE_mv = 'am' # 'arc' for MV-Arc; 'am' for MV-Cos
 
 # CurricularFace
 M_curricular = 0.5
@@ -110,8 +110,8 @@ ALPHA_50_qmag = 0.065984
 BETA_50_qmag = 0.103799
 ALPHA_100_qmag = 0.077428
 BETA_100_qmag = 0.125926
-ALPHA_qmag = ALPHA_100_qmag
-BETA_qmag  = BETA_100_qmag
+ALPHA_qmag = ALPHA_50_qmag
+BETA_qmag  = BETA_50_qmag
 
 
 

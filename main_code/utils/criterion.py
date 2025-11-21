@@ -1,3 +1,4 @@
+from abc import abstractmethod
 import math
 import torch
 import torch.nn as nn
@@ -339,7 +340,6 @@ class MV_Softmax(nn.Module):
                  margin: float = 0.35,
                  mv_weight: float = 1.12,
                  s: float = 32.0,
-                 margin_type: str = 'arc',   # 'am' or 'arc'
                  device_id=None):
         """
         Args:
@@ -348,8 +348,6 @@ class MV_Softmax(nn.Module):
             margin       : angular margin (m)
             mv_weight    : λ in the paper (hard-example scaling)
             s            : logit scale (same as Cos/Arc)
-            margin_type  : 'am'  → additive margin (CosFace style)
-                           'arc' → additive *angular* margin (ArcFace style)
             device_id    : (optional) list of GPUs for model-parallel (rare)
         """
         super().__init__()
@@ -358,25 +356,15 @@ class MV_Softmax(nn.Module):
         self.margin     = margin
         self.mv_weight  = mv_weight
         self.s          = s
-        self.margin_type = margin_type.lower()
         self.device_id   = device_id
-
-        assert self.margin_type in ('am', 'arc'), "margin_type must be 'am' or 'arc'"
 
         # ----- class prototypes (same shape as ArcFace) -----
         self.weight = nn.Parameter(torch.empty(num_class, feat_dim))
         # InsightFace-style init (large values → stable training)
         self.weight.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
 
-        # pre-compute for Arc margin
-        if self.margin_type == 'arc':
-            self.cos_m = math.cos(margin)
-            self.sin_m = math.sin(margin)
-            self.th    = math.cos(math.pi - margin)      # threshold for easy-margin
-            self.mm    = self.sin_m * margin
-
         print(f"MV_Softmax → margin={margin:.3f}, mv_weight={mv_weight:.2f}, "
-              f"s={s:.1f}, type={self.margin_type.upper()}")
+              f"s={s:.1f}")
 
     # --------------------------------------------------------------------
     def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
@@ -385,8 +373,26 @@ class MV_Softmax(nn.Module):
         Shape: [feat_dim, batch_size]  (same as all other heads)
         """
         return self.weight[:, labels].clone().detach()   # [D, N]
-
+    
     # --------------------------------------------------------------------
+    @abstractmethod
+    def foward(self, x: torch.Tensor, label: torch.Tensor):
+        pass
+    # --------------------------------------------------------------------
+    def _model_parallel_cos(self, x_norm, w_norm):
+        """Rarely used – kept for API parity with SphereFace/ArcFace."""
+        x = x_norm
+        sub_weights = torch.chunk(w_norm, len(self.device_id), dim=0)
+        out = []
+        for i, dev in enumerate(self.device_id):
+            xi = x.to(dev)
+            wi = sub_weights[i].to(dev)
+            out.append(F.linear(xi, wi))
+        return torch.cat(out, dim=1).to(self.device_id[0])
+
+class MV_SoftmaxCos(MV_Softmax):
+    
+    
     def forward(self, x: torch.Tensor, label: torch.Tensor):
         """
         Args:
@@ -419,17 +425,10 @@ class MV_Softmax(nn.Module):
             target_cos = cos_theta[torch.arange(cos_theta.size(0)), label].view(-1, 1)
 
             # ----- margin handling ------------------------------------------------
-            if self.margin_type == 'am':                     # Additive Margin (CosFace)
-                final_target = torch.where(target_cos > self.margin,
-                                           target_cos - self.margin,
-                                           target_cos)
-                mask = cos_theta > (target_cos - self.margin)
-
-            else:                                            # Additive Angular Margin (ArcFace)
-                sin_theta   = torch.sqrt(1.0 - target_cos**2 + 1e-9)
-                cos_theta_m = target_cos * self.cos_m - sin_theta * self.sin_m
-                final_target = torch.where(target_cos > 0.0, cos_theta_m, target_cos)
-                mask = cos_theta > cos_theta_m
+            final_target = torch.where(target_cos > self.margin,
+                                        target_cos - self.margin,
+                                        target_cos)
+            mask = cos_theta > (target_cos - self.margin)
 
             # ----- MV-guided hard-example scaling ---------------------------------
             hard_example = cos_theta[mask]
@@ -450,19 +449,74 @@ class MV_Softmax(nn.Module):
 
         return [pre_margin_logits, logits], norms, 0, one_hot
 
-    # --------------------------------------------------------------------
-    def _model_parallel_cos(self, x_norm, w_norm):
-        """Rarely used – kept for API parity with SphereFace/ArcFace."""
-        x = x_norm
-        sub_weights = torch.chunk(w_norm, len(self.device_id), dim=0)
-        out = []
-        for i, dev in enumerate(self.device_id):
-            xi = x.to(dev)
-            wi = sub_weights[i].to(dev)
-            out.append(F.linear(xi, wi))
-        return torch.cat(out, dim=1).to(self.device_id[0])
+class MV_SoftmaxArc(MV_Softmax):
+    def __init__(self, feat_dim, num_class, margin = 0.35, mv_weight = 1.12, s = 32, device_id=None):
+        super().__init__(feat_dim, num_class, margin, mv_weight, s, device_id)
+        # pre-compute for Arc margin
+        self.cos_m = math.cos(margin)
+        self.sin_m = math.sin(margin)
+        self.th    = math.cos(math.pi - margin)      # threshold for easy-margin
+        self.mm    = self.sin_m * margin
+    
+    
+    
+    def forward(self, x: torch.Tensor, label: torch.Tensor):
+        """
+        Args:
+            x     : raw backbone features, [N, feat_dim]
+            label : ground-truth indices,   [N]
 
-class MV_SoftmaxNet(nn.Module):
+        Returns:
+            [pre_margin_logits, final_logits], norms, loss_g, one_hot
+            (identical to CosFace/ArcFace etc.)
+        """
+        with autocast(device_type='cuda'):
+            # ---- feature norm (for MagFace / logging) ----
+            norms = torch.norm(x, p=2, dim=1, keepdim=True)          # [N,1]
+
+            # ---- L2-normalise both sides (ArcFace style) ----
+            x_norm = F.normalize(x, dim=1)                           # [N,D]
+            w_norm = F.normalize(self.weight, dim=1)                 # [C,D]
+
+            # ---- cosine similarity ----
+            if self.device_id is None:
+                cos_theta = F.linear(x_norm, w_norm)                 # [N,C]
+            else:
+                # model-parallel (kept for completeness, rarely used)
+                cos_theta = self._model_parallel_cos(x_norm, w_norm)
+
+            cos_theta = cos_theta.clamp(-1 + 1e-7, 1 - 1e-7)
+            cos_theta_cp = cos_theta.clone()                         # pre-margin copy
+
+            # ---- target cosine ----
+            target_cos = cos_theta[torch.arange(cos_theta.size(0)), label].view(-1, 1)
+
+            # ----- margin handling ------------------------------------------------
+            sin_theta   = torch.sqrt(1.0 - target_cos**2 + 1e-9)
+            cos_theta_m = target_cos * self.cos_m - sin_theta * self.sin_m
+            final_target = torch.where(target_cos > 0.0, cos_theta_m, target_cos)
+            mask = cos_theta > cos_theta_m
+
+            # ----- MV-guided hard-example scaling ---------------------------------
+            hard_example = cos_theta[mask]
+            if hard_example.numel() > 0:
+                cos_theta[mask] = self.mv_weight * hard_example + (self.mv_weight - 1.0)
+
+            # ----- replace target column ------------------------------------------------
+            final_target = final_target.to(cos_theta.dtype)
+            cos_theta.scatter_(1, label.view(-1, 1), final_target)
+
+            # ----- scale to logits ------------------------------------------------------
+            logits = cos_theta * self.s
+            pre_margin_logits = cos_theta_cp * self.s
+
+            # ----- one-hot (for debugging / proxy analysis) ---------------------------
+            one_hot = torch.zeros_like(logits)
+            one_hot.scatter_(1, label.view(-1, 1), 1.0)
+
+        return [pre_margin_logits, logits], norms, 0, one_hot
+
+class MV_SoftmaxCosNet(nn.Module):
     """
     Backbone → embedding → MV_Softmax head
     """
@@ -470,15 +524,14 @@ class MV_SoftmaxNet(nn.Module):
         super().__init__()
         self.backbone = get_backbone(backbone)
 
-        self.mv_head = MV_Softmax(
+        self.mv_head = MV_SoftmaxCos(
             feat_dim=FEATURE_DIM,
             num_class=num_classes,
             margin=M_mv,          # define in your config
             mv_weight=WEIGHT_mv,
             s=S_mv,
-            margin_type=MARGIN_TYPE_mv   # 'am' or 'arc'
         )
-        self.loss_model = f"mv_softmax_{MARGIN_TYPE_mv}"
+        self.loss_model = f"mv_softmax_cos"
         print(f"Initialize MV_Softmax model with backbone {backbone}")
 
     def forward(self, x, labels=None):
@@ -489,7 +542,34 @@ class MV_SoftmaxNet(nn.Module):
             return self.mv_head(feats, labels)
         else:
             return feats
- 
+
+class MV_SoftmaxArcNet(nn.Module):
+    """
+    Backbone → embedding → MV_Softmax head
+    """
+    def __init__(self, num_classes: int, backbone=BACKBONE):
+        super().__init__()
+        self.backbone = get_backbone(backbone)
+
+        self.mv_head = MV_SoftmaxArc(
+            feat_dim=FEATURE_DIM,
+            num_class=num_classes,
+            margin=M_mv,          # define in your config
+            mv_weight=WEIGHT_mv,
+            s=S_mv,
+        )
+        self.loss_model = f"mv_softmax_cos"
+        print(f"Initialize MV_Softmax model with backbone {backbone}")
+
+    def forward(self, x, labels=None):
+        feats = self.backbone(x)                 # [N, FEATURE_DIM]
+
+        if self.training:
+            assert labels is not None
+            return self.mv_head(feats, labels)
+        else:
+            return feats
+
 class CurricularFace(nn.Module):
     """
     CurricularFace: Adaptive Curriculum Learning Loss for Deep Face Recognition
@@ -2177,20 +2257,16 @@ class QAFaceNet(nn.Module):
             training: [pre_margin_logits, logits], norms, loss_g, one_hot
             inference: features [N, D]
         """
+        feats = self.backbone(x)
         if self.training:
             assert labels is not None, "Labels required in training mode"
-            
-            # Forward through both backbones
-            feats_main = self.backbone(x)
-            
             with torch.no_grad():
                 feats_momentum = self.mbackbone(x)
-            
             # QAFace forward
-            return self.qaface(feats_main, feats_momentum, labels)
+            return self.qaface(feats, feats_momentum, labels)
         else:
             # Inference: only use main backbone
-            return self.backbone(x)
+            return feats
 
 class QMagFace(nn.Module):
     """

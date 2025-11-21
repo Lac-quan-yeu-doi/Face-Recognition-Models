@@ -33,6 +33,8 @@ from dotenv import load_dotenv
 import socket
 import subprocess
 import requests
+import warnings
+warnings.filterwarnings("ignore")
 
 from utils.config import *
 from utils.dataset import CASIAwebfaceDataset, LFWPairDataset, FlatPairDataset
@@ -503,7 +505,7 @@ def main_pipeline(
 
     # === Training Loop ===
     for epoch in range(start_epoch, args.epochs + start_epoch):
-        if epoch == 5 and model_name in ['VPLArcFace', 'QAFace']:
+        if epoch == EPOCH_CHANGE_FLAG and model_name in ['VPLArcFace', 'QAFace']:
             print("### Warm-up phase completed, switch to normal training ###")
             model.change_training_mode(True)
 
