@@ -45,6 +45,7 @@ main_code/validation_log*
 sphere-cos-arc before wandb/
 main_code/models_evaluation/
 main_code/evaluation_results/
+main_code/info_result
 data_a_P/
 
 # ignore sh file

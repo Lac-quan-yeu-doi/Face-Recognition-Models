@@ -17,13 +17,13 @@ class SphereFace(nn.Module):
     Paper: https://arxiv.org/abs/1704.08063
     """
     def __init__(self,
-                 in_features: int,
-                 out_features: int,
+                 feat_dim: int,
+                 num_classes: int,
                  device_id=None,
                  m: int = 4):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
+        self.feat_dim = feat_dim
+        self.num_classes = num_classes
         self.m = m
         self.device_id = device_id
 
@@ -35,7 +35,7 @@ class SphereFace(nn.Module):
         self.iter = 0
 
         # ---- Class prototypes ----
-        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.weight = nn.Parameter(torch.empty(num_classes, feat_dim))
         nn.init.xavier_uniform_(self.weight)
 
         # ---- Chebyshev polynomials for cos(mθ) ----
@@ -119,8 +119,8 @@ class SphereFaceNet(nn.Module):
 
         # ----- SphereFace head -----
         self.sphereface = SphereFace(
-            in_features=FEATURE_DIM,
-            out_features=num_classes,
+            feat_dim=FEATURE_DIM,
+            num_classes=num_classes,
             m=M_sphere
         )
         self.loss_model = "sphereface"   # for logging / compatibility
@@ -140,16 +140,16 @@ class CosFace(nn.Module):
     """
     CosFace (Additive Angular Margin) – InsightFace style
     """
-    def __init__(self, embedding_size=512, classnum=51332,
+    def __init__(self, feat_dim=512, num_classes=51332,
                  s: float = 64.0, m: float = 0.4):
         super().__init__()
-        self.classnum = classnum
+        self.num_classes = num_classes
         self.s = s
         self.m = m
         self.eps = 1e-4
 
         # ---- weight (kernel) -------------------------------------------------
-        self.kernel = nn.Parameter(torch.empty(embedding_size, classnum))
+        self.kernel = nn.Parameter(torch.empty(feat_dim, num_classes))
         # InsightFace init: large values → stable training
         self.kernel.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
 
@@ -209,8 +209,8 @@ class CosFaceNet(nn.Module):
 
         # ----- CosFace head -----
         self.cosface = CosFace(
-            embedding_size=FEATURE_DIM,
-            classnum=num_classes,
+            feat_dim=FEATURE_DIM,
+            num_classes=num_classes,
             s=S_cos,
             m=M_cos
         )
@@ -233,16 +233,16 @@ class CosFaceNet(nn.Module):
 
 class ArcFace(nn.Module):
     r"""Correct ArcFace Implementation (matches your original)"""
-    def __init__(self, embed_size, num_classes, device_id=None, s=64.0, m=0.50, easy_margin=True):
+    def __init__(self, feat_dim, num_classes, device_id=None, s=64.0, m=0.50, easy_margin=True):
         super(ArcFace, self).__init__()
-        self.in_features = embed_size
-        self.out_features = num_classes
+        self.feat_dim = feat_dim
+        self.num_classes = num_classes
         self.device_id = device_id
         self.s = s
         self.m = m
         self.easy_margin = easy_margin
 
-        self.weight = nn.Parameter(torch.FloatTensor(num_classes, embed_size))
+        self.weight = nn.Parameter(torch.FloatTensor(num_classes, feat_dim))
         nn.init.xavier_uniform_(self.weight)
 
         self.cos_m = math.cos(m)
@@ -309,7 +309,7 @@ class ArcFaceNet(nn.Module):
         self.backbone = get_backbone(backbone)
 
         self.arcface = ArcFace(
-            embed_size=FEATURE_DIM,
+            feat_dim=FEATURE_DIM,
             num_classes=num_classes,
             s=S_arc,
             m=M_arc,
@@ -336,7 +336,7 @@ class MV_Softmax(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  margin: float = 0.35,
                  mv_weight: float = 1.12,
                  s: float = 32.0,
@@ -344,7 +344,7 @@ class MV_Softmax(nn.Module):
         """
         Args:
             feat_dim     : dimension of the backbone embedding
-            num_class    : number of identities
+            num_classes    : number of identities
             margin       : angular margin (m)
             mv_weight    : λ in the paper (hard-example scaling)
             s            : logit scale (same as Cos/Arc)
@@ -352,14 +352,14 @@ class MV_Softmax(nn.Module):
         """
         super().__init__()
         self.feat_dim   = feat_dim
-        self.num_class  = num_class
+        self.num_classes  = num_classes
         self.margin     = margin
         self.mv_weight  = mv_weight
         self.s          = s
         self.device_id   = device_id
 
         # ----- class prototypes (same shape as ArcFace) -----
-        self.weight = nn.Parameter(torch.empty(num_class, feat_dim))
+        self.weight = nn.Parameter(torch.empty(num_classes, feat_dim))
         # InsightFace-style init (large values → stable training)
         self.weight.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
 
@@ -450,8 +450,8 @@ class MV_SoftmaxCos(MV_Softmax):
         return [pre_margin_logits, logits], norms, 0, one_hot
 
 class MV_SoftmaxArc(MV_Softmax):
-    def __init__(self, feat_dim, num_class, margin = 0.35, mv_weight = 1.12, s = 32, device_id=None):
-        super().__init__(feat_dim, num_class, margin, mv_weight, s, device_id)
+    def __init__(self, feat_dim, num_classes, margin = 0.35, mv_weight = 1.12, s = 32, device_id=None):
+        super().__init__(feat_dim, num_classes, margin, mv_weight, s, device_id)
         # pre-compute for Arc margin
         self.cos_m = math.cos(margin)
         self.sin_m = math.sin(margin)
@@ -526,7 +526,7 @@ class MV_SoftmaxCosNet(nn.Module):
 
         self.mv_head = MV_SoftmaxCos(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             margin=M_mv,          # define in your config
             mv_weight=WEIGHT_mv,
             s=S_mv,
@@ -553,7 +553,7 @@ class MV_SoftmaxArcNet(nn.Module):
 
         self.mv_head = MV_SoftmaxArc(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             margin=M_mv,          # define in your config
             mv_weight=WEIGHT_mv,
             s=S_mv,
@@ -577,7 +577,7 @@ class CurricularFace(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  m: float = 0.5,
                  s: float = 64.0,
                  momentum: float = 0.01):
@@ -592,7 +592,7 @@ class CurricularFace(nn.Module):
         self.mm = math.sin(math.pi - m) * m
 
         # ---- class prototypes (kernel) ----
-        self.kernel = nn.Parameter(torch.empty(feat_dim, num_class))
+        self.kernel = nn.Parameter(torch.empty(feat_dim, num_classes))
         nn.init.normal_(self.kernel, std=0.01)
 
         # EMA of target cosine (curriculum difficulty)
@@ -680,7 +680,7 @@ class CurricularFaceNet(nn.Module):
         # ----- CurricularFace head -----
         self.curricular = CurricularFace(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             m=M_curricular,
             s=S_curricular,
             momentum=MOMENTUM_curricular
@@ -707,7 +707,7 @@ class VPLArcFace(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  s: float = 64.0,
                  m: float = 0.50,
                  easy_margin: bool = True,
@@ -717,7 +717,7 @@ class VPLArcFace(nn.Module):
         """
         Args:
             feat_dim      : backbone embedding size
-            num_class     : number of identities
+            num_classes     : number of identities
             s             : logit scale
             m             : angular margin
             easy_margin   : use easy-margin (cos > 0 → apply margin)
@@ -727,7 +727,7 @@ class VPLArcFace(nn.Module):
         """
         super().__init__()
         self.feat_dim   = feat_dim
-        self.num_class  = num_class
+        self.num_classes  = num_classes
         self.s          = s
         self.m          = m
         self.easy_margin = easy_margin
@@ -736,12 +736,12 @@ class VPLArcFace(nn.Module):
         self.device_id  = device_id
 
         # ---- class prototypes: [C, D] (ArcFace style) ----
-        self.weight = nn.Parameter(torch.empty(num_class, feat_dim))
+        self.weight = nn.Parameter(torch.empty(num_classes, feat_dim))
         nn.init.xavier_uniform_(self.weight)
 
         # ---- virtual proxy memory & life ----
-        self.register_buffer('mem', torch.zeros(num_class, feat_dim))
-        self.register_buffer('life', torch.zeros(num_class))
+        self.register_buffer('mem', torch.zeros(num_classes, feat_dim))
+        self.register_buffer('life', torch.zeros(num_classes))
 
         # ---- ArcFace constants (float32) ----
         self.register_buffer('cos_m', torch.tensor(math.cos(m), dtype=torch.float32))
@@ -853,7 +853,7 @@ class VPLArcFaceNet(nn.Module):
 
         self.vpl_head = VPLArcFace(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             s=S_vpl,
             m=M_vpl,
             easy_margin=EASY_MARGIN_vpl,
@@ -883,7 +883,7 @@ class AdaFace(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  m: float = 0.4,
                  h: float = 0.333,
                  s: float = 64.0,
@@ -892,7 +892,7 @@ class AdaFace(nn.Module):
         """
         Args:
             feat_dim  : dimension of backbone embedding
-            num_class : number of identities
+            num_classes : number of identities
             m         : base margin
             h         : adaptive margin scale (0.333 → 66% samples in [-0.333, 0.333])
             s         : logit scale
@@ -901,7 +901,7 @@ class AdaFace(nn.Module):
         """
         super().__init__()
         self.feat_dim   = feat_dim
-        self.num_class  = num_class
+        self.num_classes  = num_classes
         self.m          = m
         self.h          = h
         self.s          = s
@@ -910,7 +910,7 @@ class AdaFace(nn.Module):
         self.eps        = 1e-3
 
         # ---- class prototypes (same as CosFace: [D, C]) ----
-        self.kernel = nn.Parameter(torch.empty(feat_dim, num_class))
+        self.kernel = nn.Parameter(torch.empty(feat_dim, num_classes))
         # InsightFace init: large values → stable training
         self.kernel.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
 
@@ -1011,7 +1011,7 @@ class AdaFaceNet(nn.Module):
         # ----- AdaFace head -----
         self.adaface = AdaFace(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             m=M_ada,
             h=H_ada,
             s=S_ada,
@@ -1036,7 +1036,7 @@ class ElasticCosFace(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  s: float = 64.0,
                  m: float = 0.35,
                  std: float = 0.0125,
@@ -1044,14 +1044,14 @@ class ElasticCosFace(nn.Module):
                  device_id=None):
         super().__init__()
         self.feat_dim   = feat_dim
-        self.num_class  = num_class
+        self.num_classes  = num_classes
         self.s          = s
         self.m          = m
         self.std        = std
         self.plus       = plus
         self.device_id  = device_id
 
-        self.kernel = nn.Parameter(torch.empty(feat_dim, num_class))
+        self.kernel = nn.Parameter(torch.empty(feat_dim, num_classes))
         nn.init.normal_(self.kernel, std=0.01)
 
         print(f"ElasticCosFace → s={s:.1f}, m={m:.3f}, std={std:.4f}, plus={plus}")
@@ -1117,7 +1117,7 @@ class ElasticCosFaceNet(nn.Module):
         self.backbone = get_backbone(backbone)
         self.head = ElasticCosFace(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             s=S_elastic_cos,
             m=M_elastic_cos,
             std=STD_elastic_cos,
@@ -1142,7 +1142,7 @@ class ElasticArcFace(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  s: float = 64.0,
                  m: float = 0.50,
                  std: float = 0.0125,
@@ -1150,7 +1150,7 @@ class ElasticArcFace(nn.Module):
                  device_id=None):
         super().__init__()
         self.feat_dim   = feat_dim
-        self.num_class  = num_class
+        self.num_classes  = num_classes
         self.s          = s
         self.m          = m
         self.std        = std
@@ -1158,7 +1158,7 @@ class ElasticArcFace(nn.Module):
         self.device_id  = device_id
 
         # ---- class prototypes: [D, C] (same as CosFace, CurricularFace) ----
-        self.kernel = nn.Parameter(torch.empty(feat_dim, num_class))
+        self.kernel = nn.Parameter(torch.empty(feat_dim, num_classes))
         nn.init.normal_(self.kernel, std=0.01)
 
         print(f"ElasticArcFace → s={s:.1f}, m={m:.3f}, std={std:.4f}, plus={plus}")
@@ -1241,7 +1241,7 @@ class ElasticArcFaceNet(nn.Module):
         self.backbone = get_backbone(backbone)
         self.head = ElasticArcFace(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             s=S_elastic_arc,
             m=M_elastic_arc,
             std=STD_elastic_arc,
@@ -1267,7 +1267,7 @@ class MagFace(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  s: float = 64.0,
                  easy_margin: bool = True,
                  l_margin: float = 0.45,
@@ -1278,7 +1278,7 @@ class MagFace(nn.Module):
         """
         Args:
             feat_dim     : dimension of backbone embedding
-            num_class    : number of identities
+            num_classes    : number of identities
             s            : logit scale
             easy_margin  : apply margin only when cos > 0
             l_margin / u_margin : lower/upper adaptive margin
@@ -1287,7 +1287,7 @@ class MagFace(nn.Module):
         """
         super().__init__()
         self.feat_dim   = feat_dim
-        self.num_class  = num_class
+        self.num_classes  = num_classes
         self.s          = s
         self.easy_margin = easy_margin
         self.l_margin   = l_margin
@@ -1297,7 +1297,7 @@ class MagFace(nn.Module):
         self.device_id  = device_id
 
         # ---- class prototypes: [D, C] (CosFace style) ----
-        self.kernel = nn.Parameter(torch.empty(feat_dim, num_class))
+        self.kernel = nn.Parameter(torch.empty(feat_dim, num_classes))
         self.kernel.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
 
         print(f"MagFace → s={s:.1f}, easy_margin={easy_margin}, "
@@ -1394,7 +1394,7 @@ class MagFaceNet(nn.Module):
 
         self.magface = MagFace(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             s=S_mag,
             easy_margin=EASY_MARGIN_mag,
             l_margin=L_MARGIN_mag,
@@ -1420,8 +1420,8 @@ class SphereFace2(nn.Module):
     This is the SphereFace2-C variant (Cartesian mode).
     """
     def __init__(self,
-                 in_features: int,
-                 out_features: int,
+                 feat_dim: int,
+                 num_classes: int,
                  device_id=None,
                  alpha: float = 0.7,
                  r: float = 40.0,
@@ -1430,8 +1430,8 @@ class SphereFace2(nn.Module):
                  lw: float = 50.0):
         """
         Args:
-            in_features: Feature embedding dimension
-            out_features: Number of classes/subjects
+            feat_dim: Feature embedding dimension
+            num_classes: Number of classes/subjects
             device_id: Device ID for model parallelism (optional)
             alpha: Balance between positive/negative pairs (λ in paper Eq. 5)
             r: Scale factor for logits
@@ -1441,8 +1441,8 @@ class SphereFace2(nn.Module):
         """
         super().__init__()
         
-        self.in_features = in_features
-        self.out_features = out_features
+        self.feat_dim = feat_dim
+        self.num_classes = num_classes
         self.device_id = device_id
         
         # SphereFace2 hyperparameters
@@ -1453,11 +1453,11 @@ class SphereFace2(nn.Module):
         self.lw = lw
         
         # Class prototype weights
-        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.weight = nn.Parameter(torch.empty(num_classes, feat_dim))
         nn.init.xavier_normal_(self.weight)
         
         # Initialize bias using closed-form solution from paper
-        z = alpha / ((1. - alpha) * (out_features - 1.))
+        z = alpha / ((1. - alpha) * (num_classes - 1.))
         ay = r * (2. * 0.5**t - 1. - m)
         ai = r * (2. * 0.5**t - 1. + m)
         
@@ -1568,7 +1568,7 @@ class SphereFace2(nn.Module):
     def forward(self, input: torch.Tensor, label: torch.Tensor):
         """
         Args:
-            input: Feature embeddings [N, in_features]
+            input: Feature embeddings [N, feat_dim]
             label: Ground truth labels [N]
         
         Returns:
@@ -1619,7 +1619,7 @@ class SphereFace2(nn.Module):
             
             # Compute weighted binary cross-entropy loss
             weight = self.alpha * one_hot + (1. - self.alpha) * (1. - one_hot)
-            weight = self.lw * self.out_features / self.r * weight
+            weight = self.lw * self.num_classes / self.r * weight
             loss = F.binary_cross_entropy_with_logits(logits, one_hot, weight=weight)
             
 
@@ -1642,8 +1642,8 @@ class SphereFace2Net(nn.Module):
         
         # ----- SphereFace2 head -----
         self.sphereface2 = SphereFace2(
-            in_features=FEATURE_DIM,
-            out_features=num_classes,
+            feat_dim=FEATURE_DIM,
+            num_classes=num_classes,
             alpha=LAMBDA_sf2,
             r=R_sf2,
             m=M_sf2,
@@ -1682,8 +1682,8 @@ class UniFace(nn.Module):
     with margin-based binary classification.
     """
     def __init__(self,
-                 in_features: int,
-                 out_features: int,
+                 feat_dim: int,
+                 num_classes: int,
                  device_id=None,
                  m: float = 0.4,
                  s: float = 64.0,
@@ -1691,8 +1691,8 @@ class UniFace(nn.Module):
                  r: float = 1.0):
         """
         Args:
-            in_features: Feature embedding dimension
-            out_features: Number of classes/subjects
+            feat_dim: Feature embedding dimension
+            num_classes: Number of classes/subjects
             device_id: Device ID for model parallelism (optional)
             m: Margin for positive samples
             s: Scale factor (similar to temperature)
@@ -1701,8 +1701,8 @@ class UniFace(nn.Module):
         """
         super().__init__()
         
-        self.in_features = in_features
-        self.out_features = out_features
+        self.feat_dim = feat_dim
+        self.num_classes = num_classes
         self.device_id = device_id
         
         # UniFace hyperparameters
@@ -1712,7 +1712,7 @@ class UniFace(nn.Module):
         self.r = r  # Bias multiplier
         
         # Class prototype weights
-        self.weight = Parameter(torch.empty(out_features, in_features))
+        self.weight = Parameter(torch.empty(num_classes, feat_dim))
         nn.init.kaiming_normal_(self.weight, a=1, mode='fan_in', nonlinearity='leaky_relu')
         
         # Weight momentum buffer (for potential momentum updates)
@@ -1720,7 +1720,7 @@ class UniFace(nn.Module):
         
         # Bias initialization
         self.bias = Parameter(torch.FloatTensor(1))
-        nn.init.constant_(self.bias, math.log(out_features * r * 10))
+        nn.init.constant_(self.bias, math.log(num_classes * r * 10))
         
         print(f"init UniFace → m={self.m}, s={self.s}, l={self.l}, r={self.r}")
 
@@ -1733,7 +1733,7 @@ class UniFace(nn.Module):
     def forward(self, input: torch.Tensor, label: torch.Tensor):
         """
         Args:
-            input: Feature embeddings [N, in_features]
+            input: Feature embeddings [N, feat_dim]
             label: Ground truth labels [N]
         
         Returns:
@@ -1783,7 +1783,7 @@ class UniFace(nn.Module):
             n_loss = torch.log(1 + torch.exp(cos_m_theta_n.clamp(min=-self.s, max=self.s))) * self.l
             
             # Create one-hot encoding
-            one_hot = torch.zeros((label.size(0), self.out_features), dtype=torch.bool)
+            one_hot = torch.zeros((label.size(0), self.num_classes), dtype=torch.bool)
             if self.device_id is not None:
                 one_hot = one_hot.cuda(self.device_id[0])
             elif cos_theta.is_cuda:
@@ -1804,8 +1804,8 @@ class UniFace(nn.Module):
     # --------------------------------------------------------------------
     def __repr__(self):
         return self.__class__.__name__ + '(' \
-               + 'in_features=' + str(self.in_features) \
-               + ', out_features=' + str(self.out_features) \
+               + 'feat_dim=' + str(self.feat_dim) \
+               + ', num_classes=' + str(self.num_classes) \
                + ', m=' + str(self.m) \
                + ', s=' + str(self.s) \
                + ', l=' + str(self.l) \
@@ -1828,8 +1828,8 @@ class UniFaceNet(nn.Module):
         
         # ----- UniFace head -----
         self.uniface = UniFace(
-            in_features=FEATURE_DIM,
-            out_features=num_classes,
+            feat_dim=FEATURE_DIM,
+            num_classes=num_classes,
             m=M_uniface,
             s=S_uniface,
             l=L_uniface,
@@ -1861,13 +1861,13 @@ class UniFaceNet(nn.Module):
 
 # UniTSFace components
 class Normalized_Softmax_Loss(nn.Module):
-    def __init__(self, in_features, out_features, m=0.4, s=64):
+    def __init__(self, feat_dim, num_classes, m=0.4, s=64):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
+        self.feat_dim = feat_dim
+        self.num_classes = num_classes
         self.m = m
         self.s = s
-        self.weight = Parameter(torch.FloatTensor(out_features, in_features))
+        self.weight = Parameter(torch.FloatTensor(num_classes, feat_dim))
         nn.init.kaiming_normal_(self.weight, a=1, mode='fan_in', nonlinearity='leaky_relu')
         print(f"Init Normalized Softmax Loss → m={self.m}, s={self.s}")
 
@@ -1884,13 +1884,13 @@ class Normalized_Softmax_Loss(nn.Module):
         return cos_theta * self.s, loss, one_hot
 
 class Unified_Threshold_Integrated_Sample_to_Sample_Loss(nn.Module):
-    def __init__(self, in_features, out_features, m=0.1, s=64):
+    def __init__(self, feat_dim, num_classes, m=0.1, s=64):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
+        self.feat_dim = feat_dim
+        self.num_classes = num_classes
         self.m = m
         self.s = s
-        self.register_buffer('feat_mem', torch.zeros(out_features, in_features))
+        self.register_buffer('feat_mem', torch.zeros(num_classes, feat_dim))
         self.bias = Parameter(torch.zeros(1))
         print(f"Init UTISS Loss → m={self.m}, s={self.s}")
 
@@ -1918,17 +1918,17 @@ class UniTSFace(nn.Module):
     UniTSFace: Unified Threshold Integrated Sample-to-Sample Loss
     Paper: https://arxiv.org/abs/2309.04381  (if referencing)
     """
-    def __init__(self, in_features, out_features, m=0.4, s=64, l=1.0, r=1.0):
+    def __init__(self, feat_dim, num_classes, m=0.4, s=64, l=1.0, r=1.0):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
+        self.feat_dim = feat_dim
+        self.num_classes = num_classes
         self.m = m
         self.s = s
         self.l = l
         self.r = r
 
-        self.sample_to_class_loss = Normalized_Softmax_Loss(in_features, out_features, m=m, s=s)
-        self.sample_to_sample_loss = Unified_Threshold_Integrated_Sample_to_Sample_Loss(in_features, out_features, m=m, s=s)
+        self.sample_to_class_loss = Normalized_Softmax_Loss(feat_dim, num_classes, m=m, s=s)
+        self.sample_to_sample_loss = Unified_Threshold_Integrated_Sample_to_Sample_Loss(feat_dim, num_classes, m=m, s=s)
 
         print(f"init UniTSFace → m={self.m}, s={self.s}, λ={self.l}, r={self.r}")
 
@@ -1973,8 +1973,8 @@ class UniTSFaceNet(nn.Module):
         self.backbone = get_backbone(backbone)
 
         self.unitsface = UniTSFace(
-            in_features=FEATURE_DIM,
-            out_features=num_classes,
+            feat_dim=FEATURE_DIM,
+            num_classes=num_classes,
             m=M_units,
             s=S_units,
             l=L_units,
@@ -2003,7 +2003,7 @@ class QAFace(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  s: float = 64.0,
                  m: float = 0.50,
                  easy_margin: bool = True,
@@ -2014,7 +2014,7 @@ class QAFace(nn.Module):
         """
         Args:
             feat_dim     : backbone embedding size
-            num_class    : number of identities
+            num_classes    : number of identities
             s            : logit scale
             m            : angular margin
             easy_margin  : apply margin only when cos > 0
@@ -2025,7 +2025,7 @@ class QAFace(nn.Module):
         """
         super().__init__()
         self.feat_dim   = feat_dim
-        self.num_class  = num_class
+        self.num_classes  = num_classes
         self.s          = s
         self.m          = m
         self.easy_margin = easy_margin
@@ -2035,12 +2035,12 @@ class QAFace(nn.Module):
         self.device_id  = device_id
 
         # ---- class prototypes: [C, D] (ArcFace style) ----
-        self.weight = nn.Parameter(torch.empty(num_class, feat_dim))
+        self.weight = nn.Parameter(torch.empty(num_classes, feat_dim))
         nn.init.xavier_uniform_(self.weight)
 
         # ---- memory & life (buffers so they're saved in state_dict) ----
-        self.register_buffer('mem', torch.zeros(num_class, feat_dim))
-        self.register_buffer('life', torch.zeros(num_class))
+        self.register_buffer('mem', torch.zeros(num_classes, feat_dim))
+        self.register_buffer('life', torch.zeros(num_classes))
 
         # ---- quality stats (EMA) ----
         self.register_buffer('muy', torch.tensor(0.0))
@@ -2100,7 +2100,7 @@ class QAFace(nn.Module):
             norms = torch.norm(feats, p=2, dim=1, keepdim=True)          # [N, 1]
 
             # ---- one-hot encoding ----
-            one_hot = torch.zeros(feats.size(0), self.num_class, device=feats.device)
+            one_hot = torch.zeros(feats.size(0), self.num_classes, device=feats.device)
             one_hot.scatter_(1, labels.view(-1, 1).long(), 1.0)
 
             # ---- L2-normalize ----
@@ -2163,7 +2163,7 @@ class QAFace(nn.Module):
                 target_weight = self.weight[labels.long()] + injection   # [N, D]
                 target_weight_norm = F.normalize(target_weight, dim=1)   # [N, D]
                 cosine2 = (feats_norm * target_weight_norm).sum(dim=1, keepdim=True)  # [N, 1]
-                cosine2 = cosine2.expand(-1, self.num_class)             # [N, C]
+                cosine2 = cosine2.expand(-1, self.num_classes)             # [N, C]
 
                 # ---- combine: target uses cosine2, others use cosine1 ----
                 cosine = one_hot * cosine2 + (1.0 - one_hot) * cosine1
@@ -2220,7 +2220,7 @@ class QAFaceNet(nn.Module):
         # ---- QAFace head ----
         self.qaface = QAFace(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             s=S_qa,
             m=M_qa,
             easy_margin=EASY_MARGIN_qa,
@@ -2276,7 +2276,7 @@ class QMagFace(nn.Module):
     """
     def __init__(self,
                  feat_dim: int,
-                 num_class: int,
+                 num_classes: int,
                  s: float = S_qmag,
                  easy_margin: bool = EASY_MARGIN_qmag,
                  l_margin: float = L_MARGIN_qmag,
@@ -2288,7 +2288,7 @@ class QMagFace(nn.Module):
                  device_id=None):
         super().__init__()
         self.feat_dim   = feat_dim
-        self.num_class  = num_class
+        self.num_classes  = num_classes
         self.s          = s
         self.easy_margin = easy_margin
         self.l_margin   = l_margin
@@ -2300,7 +2300,7 @@ class QMagFace(nn.Module):
         self.device_id  = device_id
 
         # class prototypes [D, C]
-        self.kernel = Parameter(torch.empty(feat_dim, num_class))
+        self.kernel = Parameter(torch.empty(feat_dim, num_classes))
         self.kernel.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
 
         print(f"QMagFace → s={s:.1f}, easy_margin={easy_margin}, "
@@ -2414,7 +2414,7 @@ class QMagFaceNet(nn.Module):
 
         self.head = QMagFace(
             feat_dim=FEATURE_DIM,
-            num_class=num_classes,
+            num_classes=num_classes,
             s=s,
             easy_margin=easy_margin,
             l_margin=l_margin,

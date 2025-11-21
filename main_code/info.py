@@ -1,58 +1,75 @@
 import os
 import csv
 import torch
-from fvcore.nn import FlopCountAnalysis
+from torch.profiler import profile, ProfilerActivity
 
 from utils.criterion import *
+from utils.config import FEATURE_DIM
 
 model_names = {
-    "SphereFace": SphereFaceNet,
-    "CosFace": CosFaceNet,
-    "ArcFace": ArcFaceNet,
-    "MV_Softmax_cos": MV_SoftmaxCosNet,
-    "MV_Softmax_arc": MV_SoftmaxArcNet,
-    "CurricularFace": CurricularFaceNet,
-    "VPLArcFace": VPLArcFaceNet,
-    "MagFace": MagFaceNet,
-    "AdaFace": AdaFaceNet,
-    "ElasticCosFace": ElasticCosFaceNet,
-    "ElasticArcFace": ElasticArcFaceNet,
-    "SphereFace2": SphereFace2Net,
-    "UniFace": UniFaceNet,
-    "UniTSFace": UniTSFaceNet,
-    "QAFace": QAFaceNet,
-    # 'QMagFace': QMagFaceNet
+    "SphereFace": SphereFace,
+    "CosFace": CosFace,
+    "ArcFace": ArcFace,
+    "MV_Softmax_cos": MV_SoftmaxCos,
+    "MV_Softmax_arc": MV_SoftmaxArc,
+    "CurricularFace": CurricularFace,
+    "VPLArcFace": VPLArcFace,
+    "MagFace": MagFace,
+    "AdaFace": AdaFace,
+    "ElasticCosFace": ElasticCosFace,
+    "ElasticArcFace": ElasticArcFace,
+    "SphereFace2": SphereFace2,
+    "UniFace": UniFace,
+    "UniTSFace": UniTSFace,
+    "QAFace": QAFace,
 }
-
 num_classes = 10575
-backbone_name = "iresnet100"
-batch_size = 32
+batch_size = 1
 
 
-def count_flops(model, model_name, num_classes, batch_size=1, feat_dim=512):
+class FLOPsWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, *args, **kwargs):
+        out = self.model(*args, **kwargs)
+        if isinstance(out, tuple):
+            return out[0]
+        return out
+
+
+def count_flops_torch(model, model_name, num_classes, batch_size=1, feat_dim=512):
 
     model.eval()
+    wrapped = FLOPsWrapper(model)
 
     feats = torch.randn(batch_size, feat_dim)
     minput = torch.randn(batch_size, feat_dim)
     labels = torch.randint(0, num_classes, (batch_size,))
 
-    if model_name in ["QAFace"]:
-        flops = FlopCountAnalysis(model, (feats, minput, labels))
-    else:
-        flops = FlopCountAnalysis(model, (feats, labels))
+    inputs = (feats, minput, labels) if model_name == "QAFace" else (feats, labels)
 
-    return flops.total()
+    with profile(
+        activities=[ProfilerActivity.CPU],
+        with_flops=True,
+        record_shapes=False,
+        profile_memory=False,
+    ) as prof:
+        wrapped(*inputs)
+
+    # Sum all FLOPs collected by PyTorch
+    flops = sum([e.flops for e in prof.key_averages() if e.flops is not None])
+    return flops
 
 
 if __name__ == "__main__":
     os.makedirs("info_result", exist_ok=True)
-
-    csv_path = "info_result/flops.csv"
+    csv_path = f"info_result/flops_{batch_size}.csv"
 
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["ModelName", "FLOPs"])
+        writer.writerow(["ModelName", "MFLOPs"])
 
         for model_name, ModelClass in model_names.items():
 
@@ -61,24 +78,21 @@ if __name__ == "__main__":
             print("==============================")
 
             # Instantiate model
-            model = ModelClass(num_classes=num_classes, backbone=backbone_name)
+            model = ModelClass(num_classes=num_classes, feat_dim=FEATURE_DIM)
             model.eval()
 
-            # Obtain feat_dim from backbone output
-            with torch.no_grad():
-                dummy_input = torch.randn(1, 3, 112, 112)
-                feat = model.backbone(dummy_input)
-                feat_dim = feat.shape[1]
-
-            # Count flops
-            flops = count_flops(
+            # Count FLOPs using PyTorch profiler
+            flops = count_flops_torch(
                 model=model,
                 model_name=model_name,
                 num_classes=num_classes,
+                batch_size=batch_size
             )
 
-            print(f"FLOPs for {model_name}: {flops:,}")
+            mflops = flops / 1e6
 
-            writer.writerow([model_name, flops])
+            print(f"MFLOPs for {model_name}: {mflops:,.3f}")
 
-    print("\n\n🎉 FLOPs saved to: info_result/flops.csv")
+            writer.writerow([model_name, f"{mflops:.6f}"])
+
+    print(f"\n\n🎉 MFLOPs saved to: info_result/flops_{batch_size}.csv")
