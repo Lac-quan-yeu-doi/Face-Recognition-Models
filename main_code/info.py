@@ -6,21 +6,21 @@ from fvcore.nn import FlopCountAnalysis
 from utils.criterion import *
 
 model_names = {
-    'SphereFace': SphereFaceNet,
-    'CosFace': CosFaceNet,
-    'ArcFace': ArcFaceNet,
-    'MV_Softmax_cos': MV_SoftmaxCosNet,
-    'MV_Softmax_arc': MV_SoftmaxArcNet,
-    'CurricularFace': CurricularFaceNet,
-    'VPLArcFace': VPLArcFaceNet,
-    'MagFace': MagFaceNet,
-    'AdaFace': AdaFaceNet,
-    'ElasticCosFace': ElasticCosFaceNet,
-    'ElasticArcFace': ElasticArcFaceNet,
-    'SphereFace2': SphereFace2Net,
-    'UniFace': UniFaceNet,
-    'UniTSFace': UniTSFaceNet,
-    'QAFace': QAFaceNet,
+    "SphereFace": SphereFaceNet,
+    "CosFace": CosFaceNet,
+    "ArcFace": ArcFaceNet,
+    "MV_Softmax_cos": MV_SoftmaxCosNet,
+    "MV_Softmax_arc": MV_SoftmaxArcNet,
+    "CurricularFace": CurricularFaceNet,
+    "VPLArcFace": VPLArcFaceNet,
+    "MagFace": MagFaceNet,
+    "AdaFace": AdaFaceNet,
+    "ElasticCosFace": ElasticCosFaceNet,
+    "ElasticArcFace": ElasticArcFaceNet,
+    "SphereFace2": SphereFace2Net,
+    "UniFace": UniFaceNet,
+    "UniTSFace": UniTSFaceNet,
+    "QAFace": QAFaceNet,
     # 'QMagFace': QMagFaceNet
 }
 
@@ -29,39 +29,18 @@ backbone_name = "iresnet100"
 batch_size = 32
 
 
-# ============================================================
-# FLOP counter for QAFace and QMagFace
-# ============================================================
-def count_qaface_flops(model, feat_dim, num_classes, batch_size=1):
+def count_flops(model, model_name, num_classes, batch_size=1, feat_dim=512):
 
     model.eval()
 
-    feats   = torch.randn(batch_size, feat_dim)
-    minput  = torch.randn(batch_size, feat_dim)
-    labels  = torch.randint(0, num_classes, (batch_size,))
-
-    flops = FlopCountAnalysis(
-        model,
-        (feats, minput, labels)
-    )
-
-    return flops.total()
-
-
-# ============================================================
-# FLOP counter for normal margin heads (ArcFace, CosFace, etc.)
-# ============================================================
-def count_normal_flops(model, feat_dim, num_classes, batch_size=1):
-
-    model.eval()
-
-    feats  = torch.randn(batch_size, feat_dim)
+    feats = torch.randn(batch_size, feat_dim)
+    minput = torch.randn(batch_size, feat_dim)
     labels = torch.randint(0, num_classes, (batch_size,))
 
-    flops = FlopCountAnalysis(
-        model,
-        (feats, labels)
-    )
+    if model_name in ["QAFace"]:
+        flops = FlopCountAnalysis(model, (feats, minput, labels))
+    else:
+        flops = FlopCountAnalysis(model, (feats, labels))
 
     return flops.total()
 
@@ -92,17 +71,11 @@ if __name__ == "__main__":
                 feat_dim = feat.shape[1]
 
             # Count flops
-            if model_name in ["QAFace"]:
-                flops = count_qaface_flops(model.sphereface if hasattr(model, 'sphereface') else model,
-                                        feat_dim,
-                                        num_classes,
-                                        batch_size=1)
-            else:
-                # For standard heads
-                flops = count_normal_flops(model.sphereface if hasattr(model, 'sphereface') else model,
-                                        feat_dim,
-                                        num_classes,
-                                        batch_size=1)
+            flops = count_flops(
+                model=model,
+                model_name=model_name,
+                num_classes=num_classes,
+            )
 
             print(f"FLOPs for {model_name}: {flops:,}")
 
