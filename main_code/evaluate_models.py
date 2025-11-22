@@ -29,14 +29,14 @@ model_names = {
     'QMagFace': QMagFaceNet
 }
 
-device       = 'cuda' if torch.cuda.is_available() else 'cpu'
-model_folder = "models_evaluation"
-output_dir   = "evaluation_results"
-os.makedirs(output_dir, exist_ok=True)
-
 num_classes = 10575
 backbone_name = "iresnet100"
 batch_size = 64
+
+device       = 'cuda' if torch.cuda.is_available() else 'cpu'
+model_folder = f"models_evaluation/{backbone_name}"
+output_dir   = f"evaluation_results"
+os.makedirs(output_dir, exist_ok=True)
 
 acc_records = []
 auc_records = []
@@ -108,8 +108,8 @@ df_auc = pd.DataFrame(auc_records, columns=columns)
 df_acc.set_index("model", inplace=True)
 df_auc.set_index("model", inplace=True)
 
-df_acc.to_csv(os.path.join(output_dir, "accuracy_10fold.csv"))
-df_auc.to_csv(os.path.join(output_dir, "auc_10fold.csv"))
+df_acc.to_csv(os.path.join(output_dir, f"accuracy_10fold_{backbone_name}.csv"))
+df_auc.to_csv(os.path.join(output_dir, f"auc_10fold_{backbone_name}.csv"))
 
 print("\n" + "="*60)
 print("ACCURACY".center(60))
