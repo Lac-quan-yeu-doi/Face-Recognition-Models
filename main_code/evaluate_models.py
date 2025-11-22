@@ -7,7 +7,7 @@ from utils.criterion import *
 from utils.model_utils import cross_validate_kfold  
 from utils.config import DATASET_PATH
 
-test_names = ['agedb_30', 'cfp_fp', 'lfw', 'calfw', 'cplfw']
+test_names = ['agedb_30', 'cfp_fp', 'lfw', 'calfw', 'cplfw', 'xqlfw']
 # test_names = ['lfw']
 
 model_names = {
