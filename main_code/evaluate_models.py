@@ -21,7 +21,7 @@ model_names = {
     'MagFace': MagFaceNet,
     'AdaFace': AdaFaceNet,
     'ElasticCosFace': ElasticCosFaceNet,
-    'ElasticArcFace': ElasticArcFaceNet,
+    # 'ElasticArcFace': ElasticArcFaceNet,
     'SphereFace2': SphereFace2Net,
     'UniFace': UniFaceNet,
     'UniTSFace': UniTSFaceNet,
@@ -30,7 +30,7 @@ model_names = {
 }
 
 num_classes = 10575
-backbone_name = "iresnet100"
+backbone_name = "resnet18"
 batch_size = 64
 
 device       = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -47,6 +47,7 @@ test_transform = transforms.Compose([
 ])
 
 for model_name, ModelClass in model_names.items():
+    model_name = "MV_Softmax_am" if model_name == "MV_Softmax_cos" else model_name
     ckpt_path = f"{model_folder}/{model_name}_min_loss.pth"
     # ckpt_path = f"{model_folder}/{model_name.lower()}_final.pth"
     if not os.path.exists(ckpt_path):

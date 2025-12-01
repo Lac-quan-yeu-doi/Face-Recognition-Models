@@ -363,9 +363,6 @@ class MV_Softmax(nn.Module):
         # InsightFace-style init (large values → stable training)
         self.weight.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
 
-        print(f"MV_Softmax → margin={margin:.3f}, mv_weight={mv_weight:.2f}, "
-              f"s={s:.1f}")
-
     # --------------------------------------------------------------------
     def get_proxy(self, labels: torch.Tensor) -> torch.Tensor:
         """
@@ -391,8 +388,11 @@ class MV_Softmax(nn.Module):
         return torch.cat(out, dim=1).to(self.device_id[0])
 
 class MV_SoftmaxCos(MV_Softmax):
-    
-    
+    def __init__(self, feat_dim, num_classes, margin = 0.35, mv_weight = 1.12, s = 32, device_id=None):
+        super().__init__(feat_dim, num_classes, margin, mv_weight, s, device_id)
+        print(f"MV_SoftmaxCos → margin={margin:.3f}, mv_weight={mv_weight:.2f}, "
+        f"s={s:.1f}")
+
     def forward(self, x: torch.Tensor, label: torch.Tensor):
         """
         Args:
@@ -457,7 +457,8 @@ class MV_SoftmaxArc(MV_Softmax):
         self.sin_m = math.sin(margin)
         self.th    = math.cos(math.pi - margin)      # threshold for easy-margin
         self.mm    = self.sin_m * margin
-    
+        print(f"MV_SoftmaxArc → margin={margin:.3f}, mv_weight={mv_weight:.2f}, "
+            f"s={s:.1f}")
     
     
     def forward(self, x: torch.Tensor, label: torch.Tensor):
