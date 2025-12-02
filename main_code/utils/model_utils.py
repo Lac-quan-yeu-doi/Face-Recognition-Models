@@ -18,13 +18,16 @@ import torch.nn.functional as F
 from torch import optim
 from torch.utils.data import DataLoader, ConcatDataset
 import torchvision.transforms as transforms
+
 try:
     # For PyTorch 2.0 and above
     from torch.amp import GradScaler, autocast
-    autocast_context = autocast(device_type='cuda')
+
+    autocast_context = autocast(device_type="cuda")
 except ImportError:
     # For PyTorch 1.6 to 1.13
     from torch.cuda.amp import GradScaler, autocast
+
     autocast_context = autocast()
 # from torch.amp import GradScaler, autocast
 from tqdm import tqdm
@@ -34,6 +37,7 @@ import socket
 import subprocess
 import requests
 import warnings
+
 warnings.filterwarnings("ignore")
 
 from utils.config import *
@@ -45,7 +49,18 @@ from utils.utils import AverageMeter, ProgressMeter
 
 load_dotenv()
 
-def save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, isCheckpoint=True):
+
+def save_checkpoint(
+    model,
+    optimizer,
+    scheduler,
+    scaler,
+    train_loss,
+    epoch,
+    model_checkpoints_path,
+    model_name,
+    isCheckpoint=True,
+):
     """
     Save a checkpoint or minimum-loss model state, keeping up to 3 latest epoch-based checkpoints.
 
@@ -61,31 +76,47 @@ def save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, mode
     """
     os.makedirs(model_checkpoints_path, exist_ok=True)
     checkpoint = {
-        'epoch': epoch,
-        'train_loss': train_loss,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'scaler_state_dict': scaler.state_dict(),
+        "epoch": epoch,
+        "train_loss": train_loss,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "scaler_state_dict": scaler.state_dict(),
     }
-    
+
     if isCheckpoint:
-        checkpoint_path = f'{model_checkpoints_path}/{model_name}_checkpoint_epoch_{epoch}.pth'
+        checkpoint_path = (
+            f"{model_checkpoints_path}/{model_name}_checkpoint_epoch_{epoch}.pth"
+        )
         torch.save(checkpoint, checkpoint_path)
-        
+
         # Keep only the 3 latest epoch-based checkpoints
         checkpoints = sorted(
-            [f for f in os.listdir(model_checkpoints_path) 
-             if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
-            key=lambda x: int(x.split('_epoch_')[-1].split('.pth')[0])
+            [
+                f
+                for f in os.listdir(model_checkpoints_path)
+                if f.startswith(f"{model_name}_checkpoint_epoch_")
+                and f.endswith(".pth")
+            ],
+            key=lambda x: int(x.split("_epoch_")[-1].split(".pth")[0]),
         )
         while len(checkpoints) > 3:
             os.remove(os.path.join(model_checkpoints_path, checkpoints.pop(0)))
     else:
-        checkpoint_path = f'{model_checkpoints_path}/{model_name}_min_loss.pth'
+        checkpoint_path = f"{model_checkpoints_path}/{model_name}_min_loss.pth"
         torch.save(checkpoint, checkpoint_path)
 
-def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint=True):
+
+def load_latest_checkpoint(
+    model,
+    optimizer,
+    scheduler,
+    scaler,
+    model_checkpoints_path,
+    model_name,
+    device,
+    isCheckpoint=True,
+):
     """
     Load the latest epoch-based checkpoint or the minimum-loss model if available.
 
@@ -107,12 +138,16 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
 
     if isCheckpoint:
         checkpoints = sorted(
-            [f for f in os.listdir(model_checkpoints_path) 
-             if f.startswith(f'{model_name}_checkpoint_epoch_') and f.endswith('.pth')],
-            key=lambda x: int(x.split('_epoch_')[-1].split('.pth')[0]),
-            reverse=True
+            [
+                f
+                for f in os.listdir(model_checkpoints_path)
+                if f.startswith(f"{model_name}_checkpoint_epoch_")
+                and f.endswith(".pth")
+            ],
+            key=lambda x: int(x.split("_epoch_")[-1].split(".pth")[0]),
+            reverse=True,
         )
-        checkpoint_name = 'last checkpoint'
+        checkpoint_name = "last checkpoint"
     else:
         # remove the old checkpoints because min_loss may not be the latest
         for f in os.listdir(model_checkpoints_path):
@@ -121,26 +156,32 @@ def load_latest_checkpoint(model, optimizer, scheduler, scaler, model_checkpoint
                 os.remove(os.path.join(model_checkpoints_path, f))
         print("Remove old checkpoints")
 
-        checkpoints = [f for f in os.listdir(model_checkpoints_path) 
-                       if f == f'{model_name}_min_loss.pth']
-        checkpoint_name = 'min_loss_model'
+        checkpoints = [
+            f
+            for f in os.listdir(model_checkpoints_path)
+            if f == f"{model_name}_min_loss.pth"
+        ]
+        checkpoint_name = "min_loss_model"
 
     if checkpoints:
         latest_checkpoint = os.path.join(model_checkpoints_path, checkpoints[0])
         checkpoint = torch.load(latest_checkpoint, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(checkpoint["model_state_dict"])
         if optimizer is not None:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        if scheduler is not None: 
-            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if scheduler is not None:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         if scaler is not None:
-            scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        start_epoch = checkpoint['epoch'] + 1
-        train_loss = checkpoint.get('train_loss', None)
-        print(f"### Resuming training from {checkpoint_name} - epoch {checkpoint['epoch']} - {latest_checkpoint} ###")
+            scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        start_epoch = checkpoint["epoch"] + 1
+        train_loss = checkpoint.get("train_loss", None)
+        print(
+            f"### Resuming training from {checkpoint_name} - epoch {checkpoint['epoch']} - {latest_checkpoint} ###"
+        )
         return start_epoch, train_loss
 
     return 1, None  # Start from epoch 1 if no checkpoint is found
+
 
 def custom_collate_fn(batch):
     batch = [item for item in batch if item is not None]
@@ -148,26 +189,48 @@ def custom_collate_fn(batch):
         return None
     return torch.utils.data.dataloader.default_collate(batch)
 
-def train_model(model, model_name, train_loader, criterion, optimizer, scaler, device, epoch, epochs, args):
+
+def train_model(
+    model,
+    model_name,
+    train_loader,
+    criterion,
+    optimizer,
+    scaler,
+    device,
+    epoch,
+    epochs,
+    args,
+):
     model.train()
-    batch_time = AverageMeter('Time', ':6.3f')
-    data_time = AverageMeter('Data', ':6.3f')
-    losses = AverageMeter('Loss', ':.3f')
-    losses_id = AverageMeter('L_ID', ':.3f')
-    losses_mag = AverageMeter('L_mag', ':.6f')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
-    throughputs = AverageMeter('ThroughPut', ':.2f')
+    batch_time = AverageMeter("Time", ":6.3f")
+    data_time = AverageMeter("Data", ":6.3f")
+    losses = AverageMeter("Loss", ":.3f")
+    losses_id = AverageMeter("L_ID", ":.3f")
+    losses_mag = AverageMeter("L_mag", ":.6f")
+    top1 = AverageMeter("Acc@1", ":6.2f")
+    top5 = AverageMeter("Acc@5", ":6.2f")
+    throughputs = AverageMeter("ThroughPut", ":.2f")
 
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, throughputs, 'images/s', losses, losses_id, losses_mag, top1, top5],
-        prefix=f"Epoch: [{epoch}/{epochs}]"
+        [
+            batch_time,
+            data_time,
+            throughputs,
+            "images/s",
+            losses,
+            losses_id,
+            losses_mag,
+            top1,
+            top5,
+        ],
+        prefix=f"Epoch: [{epoch}/{epochs}]",
     )
 
     end = time.time()
     global iters
-    iters = iters + 1 if 'iters' in globals() else 0
+    iters = iters + 1 if "iters" in globals() else 0
 
     for i, (images, target) in enumerate(train_loader):
         if images is None:
@@ -177,10 +240,10 @@ def train_model(model, model_name, train_loader, criterion, optimizer, scaler, d
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        with autocast(device_type='cuda'):
+        with autocast(device_type="cuda"):
             output, norm, loss_g, one_hot = model(images, target)
             cosine_s, logits = output
-            if model_name not in ['SphereFace2', 'UniFace',"UniTSFace"]:
+            if model_name not in ["SphereFace2", "UniFace", "UniTSFace"]:
                 loss_id = criterion(logits, target)
             else:
                 loss_id = logits
@@ -188,10 +251,9 @@ def train_model(model, model_name, train_loader, criterion, optimizer, scaler, d
             if torch.isnan(loss) or torch.isinf(loss):
                 print("❌ Training stopped: loss is NaN or Inf.")
                 print(f"loss value: {loss.item()}")
-                notify_pushover(model_name, 'nan' if torch.isnan(loss) else 'inf')
+                notify_pushover(model_name, "nan" if torch.isnan(loss) else "inf")
                 exit()  # or sys.exit(1)
-            
-            
+
         acc1, acc5 = accuracy(cosine_s, target, topk=(1, 5))
 
         optimizer.zero_grad()
@@ -202,7 +264,11 @@ def train_model(model, model_name, train_loader, criterion, optimizer, scaler, d
         batch_size = images.size(0)
         losses.update(loss.item(), batch_size)
         losses_id.update(loss_id.item(), batch_size)
-        mag_loss = args.lambda_g * loss_g.item() if isinstance(loss_g, torch.Tensor) else args.lambda_g * loss_g
+        mag_loss = (
+            args.lambda_g * loss_g.item()
+            if isinstance(loss_g, torch.Tensor)
+            else args.lambda_g * loss_g
+        )
         losses_mag.update(mag_loss, batch_size)
         top1.update(acc1[0], batch_size)
         top5.update(acc5[0], batch_size)
@@ -213,20 +279,24 @@ def train_model(model, model_name, train_loader, criterion, optimizer, scaler, d
         if i % args.print_freq == 0:
             progress.display(i)
 
-        wandb.log({
-            "loss": loss.item(),
-            "loss_id": loss_id.item(),
-            "loss_mag": mag_loss,
-            "acc1": acc1[0],
-            "acc5": acc5[0],
-            "lr": optimizer.param_groups[0]['lr'],
-            "epoch": epoch,
-            "step": iters
-        }, step=iters)
+        wandb.log(
+            {
+                "loss": loss.item(),
+                "loss_id": loss_id.item(),
+                "loss_mag": mag_loss,
+                "acc1": acc1[0],
+                "acc5": acc5[0],
+                "lr": optimizer.param_groups[0]["lr"],
+                "epoch": epoch,
+                "step": iters,
+            },
+            step=iters,
+        )
 
         iters += 1
 
     return losses.avg
+
 
 def compute_auc(model, dataset, batch_size, device):
     """
@@ -235,37 +305,42 @@ def compute_auc(model, dataset, batch_size, device):
     model.eval()
     all_similarities = []
     all_labels = []
-    
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    
+
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True
+    )
+
     with torch.no_grad():
         for img1, img2, same in loader:
             if img1 is None:
                 continue
             img1, img2 = img1.to(device), img2.to(device)
-            
+
             feat1 = F.normalize(model(img1), dim=1)
             feat2 = F.normalize(model(img2), dim=1)
             cos_sim = (feat1 * feat2).sum(dim=1)
-            
+
             all_similarities.extend(cos_sim.cpu().numpy())
             if isinstance(same, torch.Tensor):
                 all_labels.extend(same.cpu().numpy())
             else:
                 all_labels.extend(same)
-    
+
     all_similarities = np.array(all_similarities)
     all_labels = np.array(all_labels)
-    
+
     if len(np.unique(all_labels)) < 2:
         return 0.0  # AUC undefined if only one class
-    
+
     return roc_auc_score(all_labels, all_similarities)
-    
+
+
 def evaluate(model, dataset, batch_size, device, threshold=0.33):
     model.eval()
     correct = total = 0
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True
+    )
 
     with torch.no_grad():
         for img1, img2, same in loader:
@@ -277,7 +352,7 @@ def evaluate(model, dataset, batch_size, device, threshold=0.33):
                 same = torch.tensor(same, device=device)
             else:
                 same = same.to(device)
-            
+
             feat1 = F.normalize(model(img1), dim=1)
             feat2 = F.normalize(model(img2), dim=1)
             cos_sim = (feat1 * feat2).sum(dim=1)
@@ -287,13 +362,16 @@ def evaluate(model, dataset, batch_size, device, threshold=0.33):
 
     return 100.0 * correct / total if total > 0 else 0.0
 
-def tune_threshold_roc(model, dataset, batch_size, device):    
+
+def tune_threshold_roc(model, dataset, batch_size, device):
     model.eval()
     all_similarities = []
     all_labels = []
-    
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    
+
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True
+    )
+
     with torch.no_grad():
         for img1, img2, same in loader:
             if img1 is None:
@@ -302,29 +380,32 @@ def tune_threshold_roc(model, dataset, batch_size, device):
             feat1 = F.normalize(model(img1), dim=1)
             feat2 = F.normalize(model(img2), dim=1)
             cos_sim = (feat1 * feat2).sum(dim=1)
-            
+
             all_similarities.extend(cos_sim.cpu().numpy())
             # Handle both tensor and list inputs
             if isinstance(same, torch.Tensor):
                 all_labels.extend(same.cpu().numpy())
             else:
                 all_labels.extend(same)
-    
+
     all_similarities = np.array(all_similarities)
     all_labels = np.array(all_labels)
-    
+
     # Find optimal threshold using Youden's index (maximizes TPR - FPR)
     fpr, tpr, thresholds = roc_curve(all_labels, all_similarities)
     optimal_idx = np.argmax(tpr - fpr)
     best_thresh = thresholds[optimal_idx]
-    
+
     # Calculate accuracy at this threshold
     predictions = (all_similarities > best_thresh).astype(int)
     best_acc = 100.0 * (predictions == all_labels).sum() / len(all_labels)
-    
+
     return best_thresh, best_acc
 
-def cross_validate_kfold(model, pairs_file, img_dir, transform, device, batch_size=64, k_fold=10):
+
+def cross_validate_kfold(
+    model, pairs_file, img_dir, transform, device, batch_size=64, k_fold=10
+):
     """
     10-fold evaluation on LFW-style .list file.
     Returns: mean_acc, std_acc, mean_auc, std_auc
@@ -358,7 +439,7 @@ def cross_validate_kfold(model, pairs_file, img_dir, transform, device, batch_si
         train_dataset = FlatPairDataset(train_pairs, img_dir, transform)
 
         print(f"\n=== Fold {fold}/{k_fold} ===")
-        
+
         # Tune threshold on validation fold
         best_thresh, _ = tune_threshold_roc(model, val_dataset, batch_size, device)
         print(f"Best threshold: {best_thresh:.4f}")
@@ -366,12 +447,12 @@ def cross_validate_kfold(model, pairs_file, img_dir, transform, device, batch_si
         # Evaluate accuracy on train (test proxy) using tuned threshold
         acc = evaluate(model, train_dataset, batch_size, device, best_thresh)
         fold_accuracies.append(acc)
-        print(f"Accuracy (on k-1 folds): {acc:.3f}%")
+        print(f"Accuracy (on k-1 folds): {acc:.4f}%")
 
         # Compute AUC on test set (train folds)
-        auc = compute_auc(model, train_dataset, batch_size, device)
+        auc = compute_auc(model, train_dataset, batch_size, device) * 100
         fold_aucs.append(auc)
-        print(f"AUC (on k-1 folds): {auc:.4f}")
+        print(f"AUC (on k-1 folds): {auc:.4f}%")
 
     mean_acc = np.mean(fold_accuracies)
     std_acc = np.std(fold_accuracies)
@@ -384,17 +465,20 @@ def cross_validate_kfold(model, pairs_file, img_dir, transform, device, batch_si
 
     return mean_acc, std_acc, mean_auc, std_auc
 
+
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_size', '-bs', type=int, default=512)
-    parser.add_argument('--epochs', '-e', type=int, default=30)
-    parser.add_argument('--learning_rate', '-lr', type=float, default=0.1)
+    parser.add_argument("--batch_size", "-bs", type=int, default=512)
+    parser.add_argument("--epochs", "-e", type=int, default=30)
+    parser.add_argument("--learning_rate", "-lr", type=float, default=0.1)
     # parser.add_argument('--backbone', '-bb', type=str, default='resnet18')
-    parser.add_argument('--lambda_g', type=float, default=0.0, help="Magnitude loss weight")
-    parser.add_argument('--print_freq', type=int, default=2000)
     parser.add_argument(
-        '--continue_train',
-        choices=['min_loss', 'latest'],
+        "--lambda_g", type=float, default=0.0, help="Magnitude loss weight"
+    )
+    parser.add_argument("--print_freq", type=int, default=2000)
+    parser.add_argument(
+        "--continue_train",
+        choices=["min_loss", "latest"],
         help=(
             "Resume training:\n"
             "  min_loss  -> resume from best checkpoint\n"
@@ -403,18 +487,19 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        '--model-save-path',
+        "--model-save-path",
         type=str,
-        default=f'{WORKING_PATH}/models',
-        help='Path to save model checkpoints'
+        default=f"{WORKING_PATH}/models",
+        help="Path to save model checkpoints",
     )
     parser.add_argument(
-        '--wandb-project',
+        "--wandb-project",
         type=str,
-        default='face-recognition-training',
-        help='W&B project name'
+        default="face-recognition-training",
+        help="W&B project name",
     )
     return parser.parse_args()
+
 
 def notify_pushover(model_name, type):
     def get_device_name():
@@ -422,25 +507,30 @@ def notify_pushover(model_name, type):
 
     def get_gpu_name():
         try:
-            return subprocess.check_output(
-                "nvidia-smi --query-gpu=name --format=csv,noheader", 
-                shell=True, text=True
-            ).strip().split('\n')[0]
+            return (
+                subprocess.check_output(
+                    "nvidia-smi --query-gpu=name --format=csv,noheader",
+                    shell=True,
+                    text=True,
+                )
+                .strip()
+                .split("\n")[0]
+            )
         except:
             return "No GPU detected"
 
-    
-    user_key = os.getenv('PUSHOVER_API_USER_KEY')
-    app_token = os.getenv('PUSHOVER_API_TOKEN')
+    user_key = os.getenv("PUSHOVER_API_USER_KEY")
+    app_token = os.getenv("PUSHOVER_API_TOKEN")
     url = "https://api.pushover.net/1/messages.json"
     if type == "finished":
         message = f"{model_name} - {get_device_name()} - {get_gpu_name()} - finished 🚀"
-    elif type in ['nan', 'inf']:
+    elif type in ["nan", "inf"]:
         message = f"{model_name} - {get_device_name()} - {get_gpu_name()} - stopped due to {type.upper()} loss ❌"
-        
+
     data = {"token": app_token, "user": user_key, "message": message}
     requests.post(url, data=data)
     print("### Notification is sent ###")
+
 
 def main_pipeline(
     model_class,
@@ -450,11 +540,11 @@ def main_pipeline(
     model_best_filename,
     num_classes,
     working_path,
-    dataset_path
+    dataset_path,
 ):
     start_time = time.time()
     args = parse_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # === W&B ===
     wandb.login(key=os.getenv("WANDB_API_KEY"))
@@ -462,7 +552,7 @@ def main_pipeline(
         project=project_name,
         name=model_name,
         config=vars(args),
-        dir=f'{WORKING_PATH}/wandb'
+        dir=f"{WORKING_PATH}/wandb",
     )
 
     # === Paths ===
@@ -472,62 +562,122 @@ def main_pipeline(
         print("Training from scratch, reset all checkpoints...")
     os.makedirs(model_checkpoints_path, exist_ok=True)
 
-    print(f"Training using {device} - batch size {args.batch_size} - epochs {args.epochs} - learning rate {args.learning_rate} - lambda_g {args.lambda_g}")
+    print(
+        f"Training using {device} - batch size {args.batch_size} - epochs {args.epochs} - learning rate {args.learning_rate} - lambda_g {args.lambda_g}"
+    )
     # === Data ===
-    train_transform = transforms.Compose([
-        # transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5]*3, std=[0.5]*3),
-    ])
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5]*3, std=[0.5]*3),
-    ])
+    train_transform = transforms.Compose(
+        [
+            # transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5] * 3, std=[0.5] * 3),
+        ]
+    )
+    test_transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5] * 3, std=[0.5] * 3),
+        ]
+    )
 
-    train_dataset_1 = CASIAwebfaceDataset(root_dir=f"{dataset_path}/CASIA-WebFace", split='train', transform=train_transform)
-    train_dataset_2 = CASIAwebfaceDataset(root_dir=f"{dataset_path}/CASIA-WebFace", split='valid', transform=train_transform)
+    train_dataset_1 = CASIAwebfaceDataset(
+        root_dir=f"{dataset_path}/CASIA-WebFace",
+        split="train",
+        transform=train_transform,
+    )
+    train_dataset_2 = CASIAwebfaceDataset(
+        root_dir=f"{dataset_path}/CASIA-WebFace",
+        split="valid",
+        transform=train_transform,
+    )
     train_dataset = ConcatDataset([train_dataset_1, train_dataset_2])
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, collate_fn=custom_collate_fn)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=8,
+        collate_fn=custom_collate_fn,
+    )
 
     # === Model, Opt, Scheduler ===
     model = model_class(num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
-    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
+    optimizer = optim.SGD(
+        model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4
+    )
     scheduler = get_scheduler(optimizer, "customstep")
     scaler = GradScaler()
 
     # === Resume ===
     start_epoch, min_train_loss = load_latest_checkpoint(
-        model, optimizer, scheduler, scaler, model_checkpoints_path, model_name, device, isCheckpoint=(args.continue_train == 'latest')
+        model,
+        optimizer,
+        scheduler,
+        scaler,
+        model_checkpoints_path,
+        model_name,
+        device,
+        isCheckpoint=(args.continue_train == "latest"),
     )
     if min_train_loss is None:
-        min_train_loss = float('inf')
+        min_train_loss = float("inf")
 
     # === Training Loop ===
     for epoch in range(start_epoch, args.epochs + start_epoch):
-        if epoch == EPOCH_CHANGE_FLAG and model_name in ['VPLArcFace', 'QAFace']:
+        if epoch == EPOCH_CHANGE_FLAG and model_name in ["VPLArcFace", "QAFace"]:
             print("### Warm-up phase completed, switch to normal training ###")
             model.change_training_mode(True)
 
-        train_loss = train_model(model, model_name, train_loader, criterion, optimizer, scaler, device, epoch, args.epochs + start_epoch - 1, args)
+        train_loss = train_model(
+            model,
+            model_name,
+            train_loader,
+            criterion,
+            optimizer,
+            scaler,
+            device,
+            epoch,
+            args.epochs + start_epoch - 1,
+            args,
+        )
 
         if train_loss < min_train_loss:
             min_train_loss = train_loss
-            save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, isCheckpoint=False)
+            save_checkpoint(
+                model,
+                optimizer,
+                scheduler,
+                scaler,
+                train_loss,
+                epoch,
+                model_checkpoints_path,
+                model_name,
+                isCheckpoint=False,
+            )
             print(f"New best model saved: {train_loss:.6f}")
 
-        save_checkpoint(model, optimizer, scheduler, scaler, train_loss, epoch, model_checkpoints_path, model_name, isCheckpoint=True)
+        save_checkpoint(
+            model,
+            optimizer,
+            scheduler,
+            scaler,
+            train_loss,
+            epoch,
+            model_checkpoints_path,
+            model_name,
+            isCheckpoint=True,
+        )
         scheduler.step()
 
     # Save final
     torch.save(
         {
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'scaler_state_dict': scaler.state_dict(),
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
         },
-        f"{model_checkpoints_path}/{model_final_filename}"
+        f"{model_checkpoints_path}/{model_final_filename}",
     )
 
     wandb.save(f"{model_checkpoints_path}/*")
@@ -536,9 +686,7 @@ def main_pipeline(
     end_time = time.time()
     print(f"Code runs in {end_time - start_time}s")
 
-    notify_pushover(model_name, 'finished')
+    notify_pushover(model_name, "finished")
 
     wandb.finish()
     # return model, mean_acc
-
-
