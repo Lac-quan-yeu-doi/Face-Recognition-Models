@@ -441,16 +441,16 @@ def cross_validate_kfold(
         print(f"\n=== Fold {fold}/{k_fold} ===")
 
         # Tune threshold on validation fold
-        best_thresh, _ = tune_threshold_roc(model, val_dataset, batch_size, device)
+        best_thresh, _ = tune_threshold_roc(model, train_dataset, batch_size, device)
         print(f"Best threshold: {best_thresh:.4f}")
 
         # Evaluate accuracy on train (test proxy) using tuned threshold
-        acc = evaluate(model, train_dataset, batch_size, device, best_thresh)
+        acc = evaluate(model, val_dataset, batch_size, device, best_thresh)
         fold_accuracies.append(acc)
         print(f"Accuracy (on k-1 folds): {acc:.4f}%")
 
         # Compute AUC on test set (train folds)
-        auc = compute_auc(model, train_dataset, batch_size, device) * 100
+        auc = compute_auc(model, val_dataset, batch_size, device) * 100
         fold_aucs.append(auc)
         print(f"AUC (on k-1 folds): {auc:.4f}%")
 

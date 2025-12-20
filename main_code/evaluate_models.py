@@ -30,8 +30,8 @@ model_names = {
 }
 
 num_classes = 10575
-backbone_name = "resnet18"
-batch_size = 64
+backbone_name = "iresnet18"
+batch_size = 128
 
 device       = 'cuda' if torch.cuda.is_available() else 'cpu'
 model_folder = f"models_evaluation/{backbone_name}"
